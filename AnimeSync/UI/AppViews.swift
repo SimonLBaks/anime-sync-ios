@@ -344,6 +344,7 @@ struct EpisodeWindow: View {
     let height: CGFloat
     let select: (String) -> Void
     var isWatched: (EpisodeChoice) -> Bool = { _ in false }
+    var currentProgress: Double? = nil
     private var currentID: String? { episodes.first { EpisodePresentation.isCurrent($0,number: currentNumber) }?.id }
     var body: some View {
         ScrollViewReader { proxy in
@@ -378,19 +379,24 @@ struct EpisodeWindow: View {
     }
     private func row(_ episode: EpisodeChoice) -> some View {
         let selected = EpisodePresentation.isCurrent(episode,number: currentNumber), number = EpisodePresentation.number(episode), watched = isWatched(episode)
+        let progress = selected ? currentProgress : nil
+        let watchedPercent = progress.map { "\(Int(($0 * 100).rounded()))% watched" }
         return Button { select(episode.id) } label: {
-            HStack(spacing: 12) {
-                if !number.isEmpty { Text(number).font(.caption.weight(.semibold)).monospacedDigit().frame(minWidth: 34).padding(.vertical,7).padding(.horizontal,5).background(.white.opacity(0.07),in: RoundedRectangle(cornerRadius: 7)) }
-                Text(EpisodePresentation.title(episode)).font(.subheadline).lineLimit(2).frame(maxWidth: .infinity,alignment: .leading)
-                if watched { Label("Watched",systemImage: "checkmark.circle.fill").font(.caption2).foregroundStyle(.secondary) }
-                if selected { Image(systemName: "play.fill").font(.caption).foregroundStyle(Theme.accent) }
+            VStack(spacing: 6) {
+                HStack(spacing: 12) {
+                    if !number.isEmpty { Text(number).font(.caption.weight(.semibold)).monospacedDigit().frame(minWidth: 34).padding(.vertical,7).padding(.horizontal,5).background(.white.opacity(0.07),in: RoundedRectangle(cornerRadius: 7)) }
+                    Text(EpisodePresentation.title(episode)).font(.subheadline).lineLimit(2).frame(maxWidth: .infinity,alignment: .leading)
+                    if watched { Label("Watched",systemImage: "checkmark.circle.fill").font(.caption2).foregroundStyle(.secondary) }
+                    if selected { Image(systemName: "play.fill").font(.caption).foregroundStyle(Theme.accent) }
+                }
+                if let progress { ProgressView(value: progress).tint(Theme.accent).accessibilityHidden(true) }
             }.padding(.horizontal,10).padding(.vertical,10).frame(minHeight: 56)
                 .background(selected ? Theme.accent.opacity(0.14) : .clear,in: RoundedRectangle(cornerRadius: 10))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).foregroundStyle(.white).id(episode.id)
             .accessibilityIdentifier("episode.choice." + episode.id)
             .accessibilityLabel((number.isEmpty ? "" : "Episode " + number + ", ") + EpisodePresentation.title(episode))
-            .accessibilityValue([selected ? "Current episode" : nil,watched ? "Watched" : nil].compactMap { $0 }.joined(separator: ", "))
+            .accessibilityValue([selected ? "Current episode" : nil,watched ? "Watched" : nil,watchedPercent].compactMap { $0 }.joined(separator: ", "))
             .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -447,7 +453,12 @@ struct EpisodeScreen: View {
                     }.buttonStyle(.bordered).accessibilityIdentifier("destination.tv")
                     websiteFallback
                     MiruroSourceControls(model: model)
-                    if !model.provider.episodes.isEmpty { EpisodeWindow(episodes: EpisodePresentation.ordered(model.provider.episodes),currentNumber: metadata.episode,complete: model.provider.episodeInventoryComplete,height: episodeHeight,select: { model.selectEpisode(id: $0) },isWatched: { model.sync.isEpisodeWatched(site: metadata.site,animeID: metadata.animeID,episode: EpisodePresentation.number($0)) }) }
+                    if !model.provider.episodes.isEmpty {
+                        EpisodeWindow(episodes: EpisodePresentation.ordered(model.provider.episodes),currentNumber: metadata.episode,
+                                      complete: model.provider.episodeInventoryComplete,height: episodeHeight,select: { model.selectEpisode(id: $0) },
+                                      isWatched: { model.sync.isEpisodeWatched(site: metadata.site,animeID: metadata.animeID,episode: EpisodePresentation.number($0)) },
+                                      currentProgress: model.sync.episodeProgress(site: metadata.site,animeID: metadata.animeID,episode: metadata.episode))
+                    }
                 } else { ProgressView("Finding episode…").frame(maxWidth: .infinity).padding(30); websiteFallback }
                 if let error = model.provider.error { Text(error).foregroundStyle(.secondary) }
                 Text("Native playback supports HLS and MP4. Other formats and complex subtitle styling may need the website player.").font(.caption).foregroundStyle(.secondary)

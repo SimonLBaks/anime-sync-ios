@@ -216,11 +216,15 @@ private final class FixturePreferences {
         XCTAssertFalse(service.isEpisodeWatched(animeID: "21",episode: "2")); XCTAssertFalse(service.isEpisodeWatched(animeID: "21",episode: "3"))
         XCTAssertTrue(service.isEpisodeWatched(animeID: "22",episode: "2")); XCTAssertFalse(service.isEpisodeWatched(site: "another-site",animeID: "21",episode: "1"))
         XCTAssertFalse(service.isEpisodeWatched(animeID: "21",episode: "9007199254740993"),"Out-of-protocol episode identities must not be rounded into a different key")
+        XCTAssertEqual(service.episodeProgress(animeID: "00021",episode: "03.000"),200.0 / 1200)
+        XCTAssertEqual(service.episodeProgress(animeID: "21",episode: "1"),1)
+        XCTAssertNil(service.episodeProgress(animeID: "21",episode: "2"))
         let watched = service.watchedEpisodes
         http.respond = { _ in throw URLError(.notConnectedToInternet) }
         let offline = await service.refreshHistory(); XCTAssertFalse(offline); XCTAssertEqual(service.watchedEpisodes,watched)
         http.respond = { _ in try self.reply(["progress": .array([])]) }
         let empty = await service.refreshHistory(); XCTAssertTrue(empty); XCTAssertTrue(service.watchedEpisodes.isEmpty)
+        XCTAssertNil(service.episodeProgress(animeID: "21",episode: "3"))
         XCTAssertEqual(http.requests.count,3); XCTAssertTrue(http.requests.allSatisfy { $0.httpMethod == "GET" },"One full history request supplies all markers without per-episode reads or writes")
     }
     func testWatchedIndexClearsOnSignOutServerChangeAndUnauthorizedResponse() async throws {

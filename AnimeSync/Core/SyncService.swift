@@ -7,6 +7,7 @@ import Combine
     @Published private(set) var baseURL: URL
     @Published private(set) var history = HomeHistorySnapshot.empty
     @Published private(set) var watchedEpisodes: Set<EpisodeProgressKey> = []
+    @Published private var episodeFractions: [EpisodeProgressKey: Double] = [:]
     @Published private(set) var connecting = false
     var onOwnershipLost: ((PlaybackLease) -> Void)?
     private(set) var deviceID: String
@@ -38,13 +39,13 @@ import Combine
     private static func validToken(_ token: String) -> Bool { token.range(of: "^[A-Za-z0-9._~-]{20,4096}\\z", options: .regularExpression) != nil }
     private func sameAccount(_ epoch: UInt64) throws { guard epoch == accountEpoch else { throw CancellationError() } }
     private func clearUnauthorized() {
-        accountEpoch &+= 1; token = ""; isSignedIn = false; history = .empty; watchedEpisodes = []
+        accountEpoch &+= 1; token = ""; isSignedIn = false; history = .empty; watchedEpisodes = []; episodeFractions = [:]
         try? secrets.write(nil, for: "sync.session"); status = "Sign in again to resume sync"
         let old = players.values; players.removeAll(); for lease in old { lease.invalidate(); onOwnershipLost?(lease) }
     }
     func signOut() throws {
         try secrets.write(nil, for: "sync.session")
-        accountEpoch &+= 1; connectSequence &+= 1; connecting = false; token = ""; isSignedIn = false; history = .empty; watchedEpisodes = []; status = "Sign in to Anime Sync"
+        accountEpoch &+= 1; connectSequence &+= 1; connecting = false; token = ""; isSignedIn = false; history = .empty; watchedEpisodes = []; episodeFractions = [:]; status = "Sign in to Anime Sync"
         let old = players.values; players.removeAll(); for lease in old { lease.invalidate(); onOwnershipLost?(lease) }
     }
     func selectServer(_ origin: URL) throws {
@@ -92,6 +93,7 @@ import Combine
             guard ticket == connectSequence, let next = result["token"]?.string, Self.validToken(next) else { throw CoreError.invalidResponse }
             try secrets.write(JSONEncoder().encode(StoredSession(origin: checked, token: next, deviceID: deviceID)), for: "sync.session")
             baseURL = checked; token = next; isSignedIn = true; accountEpoch &+= 1
+            episodeFractions = [:]
             preferences.set(checked.absoluteString, forKey: "animesync.base"); status = "Synced with Anime Sync"
             await flushPendingLocked()
         }} catch { if ticket == connectSequence { status = "Sign in to enable sync" }; throw error }
@@ -101,14 +103,18 @@ import Combine
         guard let key = EpisodeProgressKey(site: site,animeID: animeID,episode: episode) else { return false }
         return watchedEpisodes.contains(key)
     }
+    func episodeProgress(site: String = "miruro",animeID: String,episode: String) -> Double? {
+        guard isSignedIn, let key = EpisodeProgressKey(site: site,animeID: animeID,episode: episode) else { return nil }
+        return episodeFractions[key]
+    }
     @discardableResult func refreshHistory() async -> Bool {
-        guard !token.isEmpty else { history = .empty; watchedEpisodes = []; return false }; let epoch = accountEpoch
-        do { let result = try await queue.run { [self] () async throws -> (HomeHistorySnapshot,Set<EpisodeProgressKey>) in
+        guard !token.isEmpty else { history = .empty; watchedEpisodes = []; episodeFractions = [:]; return false }; let epoch = accountEpoch
+        do { let result = try await queue.run { [self] () async throws -> (HomeHistorySnapshot,Set<EpisodeProgressKey>,[EpisodeProgressKey: Double]) in
             let response = try await authorized("/api/progress", epoch: epoch)
             guard let rows = response["progress"]?.array else { throw CoreError.invalidResponse }
             let entries = rows.compactMap { $0.object.flatMap(HistoryEntry.init(json:)) }
-            return (HomeHistory.select(entries),WatchedEpisodeIndex.select(entries))
-        }; try sameAccount(epoch); history = result.0; watchedEpisodes = result.1
+            return (HomeHistory.select(entries),WatchedEpisodeIndex.select(entries),HomeHistory.episodeFractions(entries))
+        }; try sameAccount(epoch); history = result.0; watchedEpisodes = result.1; episodeFractions = result.2
             if status == Self.historyRefreshFailure { status = "Synced with Anime Sync" }
             return true
         } catch CoreError.unauthorized { if epoch == accountEpoch { clearUnauthorized() } }

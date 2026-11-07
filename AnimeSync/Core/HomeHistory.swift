@@ -13,6 +13,11 @@ struct HistoryEntry: Equatable, Identifiable {
     var updatedAt: String
     var id: String { "\(animeID):\(episode)" }
     var resumePosition: TimeInterval { AppWebPolicy.resume(position: currentTime, duration: duration, completed: completed) }
+    var watchedFraction: Double? {
+        if completed { return 1 }
+        guard currentTime.isFinite, currentTime >= 0, duration.isFinite, duration > 0 else { return nil }
+        return min(currentTime / duration, 1)
+    }
     var resolverURL: URL {
         var url = URLComponents(string: "https://miruro.cx/search")!
         url.queryItems = [URLQueryItem(name: "q", value: title)]
@@ -53,6 +58,16 @@ enum WatchedEpisodeIndex {
     }
 }
 enum HomeHistory {
+    static func episodeFractions(_ entries: [HistoryEntry]) -> [EpisodeProgressKey: Double] {
+        var fractions: [EpisodeProgressKey: Double] = [:]
+        // The progress endpoint returns newest first. Canonical legacy duplicates
+        // must use the latest checkpoint, including an explicit restart at zero.
+        for row in entries.reversed() {
+            guard let key = EpisodeProgressKey(site: row.site,animeID: row.animeID,episode: row.episode) else { continue }
+            fractions[key] = row.watchedFraction
+        }
+        return fractions
+    }
     static func select(_ source: [HistoryEntry]) -> HomeHistorySnapshot {
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let plain = ISO8601DateFormatter()
