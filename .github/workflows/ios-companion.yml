@@ -1,0 +1,84 @@
+name: iPhone companion build and QA
+on:
+  push:
+    branches: [main, codex/ios-companion]
+    # Ordinary code/document pushes do not consume hosted Mac minutes.
+    # Change this request file explicitly only when a device IPA is needed.
+    paths: [.github/ios-device-build.json]
+  workflow_dispatch:
+    inputs:
+      include_simulator:
+        description: Run the optional simulator acceptance suite
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: ios-companion-v2-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+  CI_SOURCE_REVISION: ${{ github.sha }}
+jobs:
+  device:
+    if: ${{ toJSON(github.event.repository.private) == 'false' && (github.event_name != 'push' || !contains(github.event.head_commit.message, '[qa-only]')) }}
+    runs-on: macos-15-intel
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Align pinned Xcode and validate generated project
+        run: |
+          test -d "$DEVELOPER_DIR"
+          sudo -n xcode-select -s "$DEVELOPER_DIR"
+          xcodebuild -version
+          python3 tools/generate-project.py --check
+      - name: Build unsigned iPhone device app
+        id: device
+        timeout-minutes: 5
+        run: bash tools/build-device.sh
+      - name: Save device IPA and exact build evidence immediately
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: device-${{ github.sha }}
+          path: |
+            dist/AnimeSync-for-local-signing.ipa
+            dist/build-receipt.json
+            dist/SHA256SUMS
+            dist/source-manifest.json
+            dist/xcode-version.txt
+            dist/swift-parse.log
+            dist/icon-render-validation.json
+            dist/icon-packaged-validation.json
+            dist/xcodebuild-device.log
+          retention-days: 3
+          if-no-files-found: error
+  simulator:
+    if: ${{ toJSON(github.event.repository.private) == 'false' && ((github.event_name == 'workflow_dispatch' && inputs.include_simulator) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[qa-features]') || contains(github.event.head_commit.message, '[qa-full]') || contains(github.event.head_commit.message, '[qa-fixtures]')))) }}
+    runs-on: macos-15-intel
+    timeout-minutes: 34
+    env:
+      QA_FOCUS: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[qa-fixtures]') && 'fixtures' || github.event_name == 'push' && !contains(github.event.head_commit.message, '[qa-full]') && 'features' || '' }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Align pinned Xcode and validate generated project
+        run: |
+          test -d "$DEVELOPER_DIR"
+          sudo -n xcode-select -s "$DEVELOPER_DIR"
+          xcodebuild -version
+          python3 tools/generate-project.py --check
+      - name: Run app-hosted unit tests and native UI fixtures
+        timeout-minutes: 30
+        run: bash tools/test-simulator.sh
+      - name: Save simulator tests, screenshots and stage diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: qa-${{ github.sha }}
+          path: dist/
+          retention-days: 3
+          if-no-files-found: error

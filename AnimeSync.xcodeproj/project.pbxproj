@@ -1,0 +1,763 @@
+// !$*UTF8*$!
+{
+    archiveVersion = 1;
+    classes = {
+    };
+    objectVersion = 56;
+    objects = {
+        0B39799CBA505CBAC4E8E77F = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "Tests/ProviderTests.swift";
+            sourceTree = "<group>";
+        };
+        0E6C9D49C9CA1CDBCA31E8DE = {
+            isa = PBXResourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (91AE3AFB5BE2C4821262DD51, 7F5A5C8A7B7DACB2BE842313, AFFA3355386483735278E6EF, D0E1E2C3018ECE55C1382E2D, 3C8C2827F8E4B7710EFDE0B3, 0F12BF66051DFEE430FB2C4C, 52DF75B2ECC9EDB275807BFA, 426CE46ACBCE785DD27B045F);
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        0F12BF66051DFEE430FB2C4C = {
+            isa = PBXBuildFile;
+            fileRef = 50DE0B017526CBAB9002CF9E;
+        };
+        102A906D60297187A13CD54B = {
+            isa = PBXResourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        1281EDBC1BDE8E71DA93CD9A = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.javascript";
+            path = "AnimeSync/Provider/Resources/provider.js";
+            sourceTree = "<group>";
+        };
+        147C980F793B726D30681C10 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.javascript";
+            path = "AnimeSync/Provider/Resources/tv-navigation.js";
+            sourceTree = "<group>";
+        };
+        17584151FCFD832CEEB20381 = {
+            isa = PBXBuildFile;
+            fileRef = A7435EE3A00FDB038B91A03E;
+        };
+        184B519F8E1416CCE38CFFD7 = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CLANG_ENABLE_MODULES = YES;
+                IPHONEOS_DEPLOYMENT_TARGET = "17.0";
+                SDKROOT = "iphoneos";
+                SWIFT_VERSION = "5.0";
+                SWIFT_STRICT_CONCURRENCY = "minimal";
+                ENABLE_USER_SCRIPT_SANDBOXING = YES;
+                SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+                DEBUG_INFORMATION_FORMAT = "dwarf";
+                SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+                ENABLE_TESTABILITY = YES;
+            };
+            name = "Debug";
+        };
+        1CD7384555B5176E9F5ACF26 = {
+            isa = PBXBuildFile;
+            fileRef = 860A52F5357752593D0FA61D;
+        };
+        1F50083C512631649BCD5715 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "Tests/ProtocolTests.swift";
+            sourceTree = "<group>";
+        };
+        204B9384E7E46A9EEBD5D86F = {
+            isa = PBXContainerItemProxy;
+            containerPortal = 244210E48437B6556980A702;
+            proxyType = 1;
+            remoteGlobalIDString = EEC3D1B6106CB11B5AEA89F1;
+            remoteInfo = "AnimeSync";
+        };
+        244210E48437B6556980A702 = {
+            isa = PBXProject;
+            attributes = {
+                BuildIndependentTargetsInParallel = YES;
+                LastUpgradeCheck = "1640";
+                TargetAttributes = {
+                    EEC3D1B6106CB11B5AEA89F1 = {
+                        CreatedOnToolsVersion = "16.4";
+                    };
+                    BE8C3CDA55E1A05A5CB7C4DA = {
+                        CreatedOnToolsVersion = "16.4";
+                        TestTargetID = EEC3D1B6106CB11B5AEA89F1;
+                    };
+                    AF247195F7126718AA93CFEA = {
+                        CreatedOnToolsVersion = "16.4";
+                        TestTargetID = EEC3D1B6106CB11B5AEA89F1;
+                    };
+                };
+            };
+            buildConfigurationList = 9F6B1A7BCFF26D263B843F95;
+            compatibilityVersion = "Xcode 14.0";
+            developmentRegion = "en";
+            hasScannedForEncodings = 0;
+            knownRegions = ("en", "Base");
+            mainGroup = AA0596BBDB4DCC95D5D4F10C;
+            productRefGroup = 6F7199ED7B63CDA338A0FB82;
+            projectDirPath = "";
+            projectRoot = "";
+            targets = (EEC3D1B6106CB11B5AEA89F1, BE8C3CDA55E1A05A5CB7C4DA, AF247195F7126718AA93CFEA);
+        };
+        2491A28A021FE17A1372DB6A = {
+            isa = PBXTargetDependency;
+            target = EEC3D1B6106CB11B5AEA89F1;
+            targetProxy = 3B1C48F4A157D4964BD82CC9;
+        };
+        276C0497DAC63E88D797C6E9 = {
+            isa = PBXBuildFile;
+            fileRef = 3EF15EF95A8425297B133EAD;
+        };
+        29E482BF45846524F707E0B8 = {
+            isa = PBXGroup;
+            name = "AnimeSync Sources";
+            children = (A185739D94A2939965932CB1, 8DF8F3098A39968A482DD0A6, 6E5C97F7FF1BBF0BEA9F5D59, 875C2273C5A79E537C280CA8, F044962EECA1517718F4583A, 37013111E0E555134B03C4CB, 2AAAFBC885A9EC72036D7C95, ED32268F0215464A9BE0E189, 5DD10CF230F50FC3D49A209B, 5C1A3D9F6E139AF5C14BD584, 767FC53C4DA786EAAB6CF402, ED7607FB223A10599A3B87FE, 35EC2F1A805A9D1F8C54618C, B1A9BD5C0F87540C0CC52F98, 2E6A93CE0796C48A7FF0133B, B75C4BF5AA0417AAF7251180, 805AB9EA654D5A2DF2E90B9A, AC56FF14E388A9F9590FB9FE, 6B15C64AE7DD623E94F98652, A48A2993346B0A47A9327309, 3EF15EF95A8425297B133EAD, A7435EE3A00FDB038B91A03E, 9EDAE866D2A30202042D26FB);
+            sourceTree = "<group>";
+        };
+        2A0614FA0CDCB2EC7DA8A666 = {
+            isa = PBXBuildFile;
+            fileRef = 6DDF5EA27ADB8873E5D15086;
+        };
+        2AAAFBC885A9EC72036D7C95 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/ProtocolModels.swift";
+            sourceTree = "<group>";
+        };
+        2ACDEF8B30377F8F175E496C = {
+            isa = PBXFileReference;
+            explicitFileType = "wrapper.application";
+            includeInIndex = 0;
+            path = "AnimeSync.app";
+            sourceTree = BUILT_PRODUCTS_DIR;
+        };
+        2B1C52BD870760779685BF3F = {
+            isa = PBXGroup;
+            name = "Resources";
+            children = (6DD5C4A6C1738AD4547A118A, 1281EDBC1BDE8E71DA93CD9A, 631AB48FFFE98244D5B43961, 147C980F793B726D30681C10, 8BE22972167A8E45070A79B9, 50DE0B017526CBAB9002CF9E, B4336BF6C38FF53FB953351C, A3457DF6C2B3FE533E6654CB);
+            sourceTree = "<group>";
+        };
+        2BF1D743F2E2F40424750AF9 = {
+            isa = PBXBuildFile;
+            fileRef = 35EC2F1A805A9D1F8C54618C;
+        };
+        2E00D6E663543C82E15C8678 = {
+            isa = XCConfigurationList;
+            buildConfigurations = (DFA1FE355B7EEABE1D1E668D, D033775B40294D3739A269F5);
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = "Release";
+        };
+        2E6A93CE0796C48A7FF0133B = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Provider/MiruroProvider.swift";
+            sourceTree = "<group>";
+        };
+        352A54F676B4A687726203F6 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "Tests/NativePlaybackTests.swift";
+            sourceTree = "<group>";
+        };
+        35EC2F1A805A9D1F8C54618C = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Provider/AppNetworkRouting.swift";
+            sourceTree = "<group>";
+        };
+        37013111E0E555134B03C4CB = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/HomeHistory.swift";
+            sourceTree = "<group>";
+        };
+        3A2B0B505D8C0BF64526D6A2 = {
+            isa = PBXBuildFile;
+            fileRef = A185739D94A2939965932CB1;
+        };
+        3B0BE3A0F91DA25CEF6C11C5 = {
+            isa = PBXFileReference;
+            explicitFileType = "wrapper.cfbundle";
+            includeInIndex = 0;
+            path = "AnimeSyncTests.xctest";
+            sourceTree = BUILT_PRODUCTS_DIR;
+        };
+        3B1C48F4A157D4964BD82CC9 = {
+            isa = PBXContainerItemProxy;
+            containerPortal = 244210E48437B6556980A702;
+            proxyType = 1;
+            remoteGlobalIDString = EEC3D1B6106CB11B5AEA89F1;
+            remoteInfo = "AnimeSync";
+        };
+        3C8C2827F8E4B7710EFDE0B3 = {
+            isa = PBXBuildFile;
+            fileRef = 8BE22972167A8E45070A79B9;
+        };
+        3EF15EF95A8425297B133EAD = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/UI/SubtitleText.swift";
+            sourceTree = "<group>";
+        };
+        4075C2D668127E3BF9E362F9 = {
+            isa = PBXTargetDependency;
+            target = EEC3D1B6106CB11B5AEA89F1;
+            targetProxy = 204B9384E7E46A9EEBD5D86F;
+        };
+        426CE46ACBCE785DD27B045F = {
+            isa = PBXBuildFile;
+            fileRef = A3457DF6C2B3FE533E6654CB;
+        };
+        489FA9FD44859C79D7032570 = {
+            isa = PBXBuildFile;
+            fileRef = A48A2993346B0A47A9327309;
+        };
+        49E6C9BC8A392A83496F3FB7 = {
+            isa = PBXBuildFile;
+            fileRef = 6B15C64AE7DD623E94F98652;
+        };
+        50DE0B017526CBAB9002CF9E = {
+            isa = PBXFileReference;
+            lastKnownFileType = "text";
+            path = "AnimeSync/Resources/Fonts/Roboto-LICENSE.txt";
+            sourceTree = "<group>";
+        };
+        52DF75B2ECC9EDB275807BFA = {
+            isa = PBXBuildFile;
+            fileRef = B4336BF6C38FF53FB953351C;
+        };
+        53C6F494B31FE0C0C03B75A2 = {
+            isa = PBXResourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        54E1F86D3FE21109BDF82322 = {
+            isa = PBXBuildFile;
+            fileRef = F044962EECA1517718F4583A;
+        };
+        5C1A3D9F6E139AF5C14BD584 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/TVClient.swift";
+            sourceTree = "<group>";
+        };
+        5DD10CF230F50FC3D49A209B = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/SyncService.swift";
+            sourceTree = "<group>";
+        };
+        61281ED80D33C20C735815ED = {
+            isa = PBXBuildFile;
+            fileRef = B1A9BD5C0F87540C0CC52F98;
+        };
+        631AB48FFFE98244D5B43961 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.javascript";
+            path = "AnimeSync/Provider/Resources/resource-observer.js";
+            sourceTree = "<group>";
+        };
+        63EBD014EA8BE3E2EE362B8B = {
+            isa = PBXBuildFile;
+            fileRef = 5C1A3D9F6E139AF5C14BD584;
+        };
+        69C752904C491A3C85E27B0D = {
+            isa = PBXBuildFile;
+            fileRef = 352A54F676B4A687726203F6;
+        };
+        6B15C64AE7DD623E94F98652 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/UI/AppViews.swift";
+            sourceTree = "<group>";
+        };
+        6BDB0417C9509287DCE2BED0 = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = "Automatic";
+                CURRENT_PROJECT_VERSION = "8";
+                MARKETING_VERSION = "0.1.7";
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+                TARGETED_DEVICE_FAMILY = "1";
+                LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+                SWIFT_VERSION = "5.0";
+                OTHER_SWIFT_FLAGS = ("$(inherited)", "-Xfrontend", "-warn-long-expression-type-checking=200", "-Xfrontend", "-warn-long-function-bodies=500");
+                GENERATE_INFOPLIST_FILE = YES;
+                PRODUCT_BUNDLE_IDENTIFIER = "xyz.loibaks.animecompanion.ios.uitests";
+                PRODUCT_MODULE_NAME = "AnimeSyncUITests";
+                TEST_TARGET_NAME = "AnimeSync";
+                SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+                DEBUG_INFORMATION_FORMAT = "dwarf";
+                SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+                ENABLE_TESTABILITY = YES;
+            };
+            name = "Debug";
+        };
+        6BE62CD0820A946B8CE7500C = {
+            isa = PBXBuildFile;
+            fileRef = AC56FF14E388A9F9590FB9FE;
+        };
+        6DD5C4A6C1738AD4547A118A = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.javascript";
+            path = "AnimeSync/Provider/Resources/dashboard.js";
+            sourceTree = "<group>";
+        };
+        6DDF5EA27ADB8873E5D15086 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "Tests/AppConfigurationTests.swift";
+            sourceTree = "<group>";
+        };
+        6E5C97F7FF1BBF0BEA9F5D59 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/AppWebPolicy.swift";
+            sourceTree = "<group>";
+        };
+        6F7199ED7B63CDA338A0FB82 = {
+            isa = PBXGroup;
+            name = "Products";
+            children = (2ACDEF8B30377F8F175E496C, 3B0BE3A0F91DA25CEF6C11C5, 8BC102032562C4C0BA260353);
+            sourceTree = "<group>";
+        };
+        767FC53C4DA786EAAB6CF402 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/TVDiscovery.swift";
+            sourceTree = "<group>";
+        };
+        778B9C581D23113EED39C1A2 = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = "Automatic";
+                CURRENT_PROJECT_VERSION = "8";
+                MARKETING_VERSION = "0.1.7";
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+                TARGETED_DEVICE_FAMILY = "1";
+                LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+                SWIFT_VERSION = "5.0";
+                GENERATE_INFOPLIST_FILE = NO;
+                INFOPLIST_FILE = "AnimeSync/Info.plist";
+                PRODUCT_BUNDLE_IDENTIFIER = "xyz.loibaks.animecompanion.ios";
+                PRODUCT_MODULE_NAME = "AnimeSync";
+                ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon";
+                APP_SOURCE_REVISION = "local";
+                OTHER_SWIFT_FLAGS = ("$(inherited)", "-Xfrontend", "-warn-long-expression-type-checking=200", "-Xfrontend", "-warn-long-function-bodies=500");
+                SWIFT_OPTIMIZATION_LEVEL = "-O";
+                DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+                SWIFT_COMPILATION_MODE = "wholemodule";
+            };
+            name = "Release";
+        };
+        792D1C683330A89E120CE548 = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = "Automatic";
+                CURRENT_PROJECT_VERSION = "8";
+                MARKETING_VERSION = "0.1.7";
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+                TARGETED_DEVICE_FAMILY = "1";
+                LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+                SWIFT_VERSION = "5.0";
+                GENERATE_INFOPLIST_FILE = NO;
+                INFOPLIST_FILE = "AnimeSync/Info.plist";
+                PRODUCT_BUNDLE_IDENTIFIER = "xyz.loibaks.animecompanion.ios";
+                PRODUCT_MODULE_NAME = "AnimeSync";
+                ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon";
+                APP_SOURCE_REVISION = "local";
+                OTHER_SWIFT_FLAGS = ("$(inherited)", "-Xfrontend", "-warn-long-expression-type-checking=200", "-Xfrontend", "-warn-long-function-bodies=500");
+                SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+                DEBUG_INFORMATION_FORMAT = "dwarf";
+                SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+                ENABLE_TESTABILITY = YES;
+            };
+            name = "Debug";
+        };
+        79E923A1D6E20614A4F41945 = {
+            isa = PBXBuildFile;
+            fileRef = ED32268F0215464A9BE0E189;
+        };
+        7F5A5C8A7B7DACB2BE842313 = {
+            isa = PBXBuildFile;
+            fileRef = 1281EDBC1BDE8E71DA93CD9A;
+        };
+        805AB9EA654D5A2DF2E90B9A = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Provider/ProviderModels.swift";
+            sourceTree = "<group>";
+        };
+        860A52F5357752593D0FA61D = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "Tests/AppModelTests.swift";
+            sourceTree = "<group>";
+        };
+        875C2273C5A79E537C280CA8 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/CoreHTTP.swift";
+            sourceTree = "<group>";
+        };
+        87A2FDBDA18D058E3FC6590A = {
+            isa = PBXBuildFile;
+            fileRef = 37013111E0E555134B03C4CB;
+        };
+        87F24AD96FC90E9D3CDB2497 = {
+            isa = XCConfigurationList;
+            buildConfigurations = (792D1C683330A89E120CE548, 778B9C581D23113EED39C1A2);
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = "Release";
+        };
+        8BC102032562C4C0BA260353 = {
+            isa = PBXFileReference;
+            explicitFileType = "wrapper.cfbundle";
+            includeInIndex = 0;
+            path = "AnimeSyncUITests.xctest";
+            sourceTree = BUILT_PRODUCTS_DIR;
+        };
+        8BE22972167A8E45070A79B9 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "file";
+            path = "AnimeSync/Resources/Fonts/Roboto-Bold.ttf";
+            sourceTree = "<group>";
+        };
+        8CDB910FE182FEC222FD5C67 = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (A69719C5F9C36A56FA899421);
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        8DF8F3098A39968A482DD0A6 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/AppConfiguration.swift";
+            sourceTree = "<group>";
+        };
+        8E35F39F8F2DFA6F07E4836F = {
+            isa = PBXBuildFile;
+            fileRef = 875C2273C5A79E537C280CA8;
+        };
+        8F5619F2E1E6A46394F816AD = {
+            isa = PBXFrameworksBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        91AE3AFB5BE2C4821262DD51 = {
+            isa = PBXBuildFile;
+            fileRef = 6DD5C4A6C1738AD4547A118A;
+        };
+        91B2CA025A54C53441085EFD = {
+            isa = PBXBuildFile;
+            fileRef = 2AAAFBC885A9EC72036D7C95;
+        };
+        934B484B36ECB0EF51DFB39B = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = "Automatic";
+                CURRENT_PROJECT_VERSION = "8";
+                MARKETING_VERSION = "0.1.7";
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+                TARGETED_DEVICE_FAMILY = "1";
+                LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+                SWIFT_VERSION = "5.0";
+                OTHER_SWIFT_FLAGS = ("$(inherited)", "-Xfrontend", "-warn-long-expression-type-checking=200", "-Xfrontend", "-warn-long-function-bodies=500");
+                GENERATE_INFOPLIST_FILE = YES;
+                PRODUCT_BUNDLE_IDENTIFIER = "xyz.loibaks.animecompanion.ios.uitests";
+                PRODUCT_MODULE_NAME = "AnimeSyncUITests";
+                TEST_TARGET_NAME = "AnimeSync";
+                SWIFT_OPTIMIZATION_LEVEL = "-O";
+                DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+                SWIFT_COMPILATION_MODE = "wholemodule";
+            };
+            name = "Release";
+        };
+        9EDAE866D2A30202042D26FB = {
+            isa = PBXFileReference;
+            lastKnownFileType = "text.plist.xml";
+            path = "AnimeSync/Info.plist";
+            sourceTree = "<group>";
+        };
+        9F6B1A7BCFF26D263B843F95 = {
+            isa = XCConfigurationList;
+            buildConfigurations = (184B519F8E1416CCE38CFFD7, A824290273A346217D9BE6F4);
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = "Release";
+        };
+        A185739D94A2939965932CB1 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/AnimeSyncApp.swift";
+            sourceTree = "<group>";
+        };
+        A3457DF6C2B3FE533E6654CB = {
+            isa = PBXFileReference;
+            lastKnownFileType = "folder.assetcatalog";
+            path = "AnimeSync/Resources/Assets.xcassets";
+            sourceTree = "<group>";
+        };
+        A48A2993346B0A47A9327309 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/UI/NativePlayback.swift";
+            sourceTree = "<group>";
+        };
+        A69719C5F9C36A56FA899421 = {
+            isa = PBXBuildFile;
+            fileRef = B39930B0B722CEC537811850;
+        };
+        A7435EE3A00FDB038B91A03E = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/UI/TVViews.swift";
+            sourceTree = "<group>";
+        };
+        A824290273A346217D9BE6F4 = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CLANG_ENABLE_MODULES = YES;
+                IPHONEOS_DEPLOYMENT_TARGET = "17.0";
+                SDKROOT = "iphoneos";
+                SWIFT_VERSION = "5.0";
+                SWIFT_STRICT_CONCURRENCY = "minimal";
+                ENABLE_USER_SCRIPT_SANDBOXING = YES;
+                SWIFT_OPTIMIZATION_LEVEL = "-O";
+                DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+                SWIFT_COMPILATION_MODE = "wholemodule";
+            };
+            name = "Release";
+        };
+        AA0596BBDB4DCC95D5D4F10C = {
+            isa = PBXGroup;
+            children = (29E482BF45846524F707E0B8, 2B1C52BD870760779685BF3F, D60409337774CCE94860379A, 6F7199ED7B63CDA338A0FB82);
+            sourceTree = "<group>";
+        };
+        AC56FF14E388A9F9590FB9FE = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/UI/AppModel.swift";
+            sourceTree = "<group>";
+        };
+        AF007BEE17D20221BA2913C5 = {
+            isa = PBXBuildFile;
+            fileRef = 6E5C97F7FF1BBF0BEA9F5D59;
+        };
+        AF247195F7126718AA93CFEA = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = DF02E7DA679EC4B055A30C47;
+            buildPhases = (8CDB910FE182FEC222FD5C67, 8F5619F2E1E6A46394F816AD, 102A906D60297187A13CD54B);
+            buildRules = ();
+            dependencies = (4075C2D668127E3BF9E362F9);
+            name = "AnimeSyncUITests";
+            productName = "AnimeSyncUITests";
+            productReference = 8BC102032562C4C0BA260353;
+            productType = "com.apple.product-type.bundle.ui-testing";
+        };
+        AFFA3355386483735278E6EF = {
+            isa = PBXBuildFile;
+            fileRef = 631AB48FFFE98244D5B43961;
+        };
+        B1A9BD5C0F87540C0CC52F98 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Provider/MediaBridge.swift";
+            sourceTree = "<group>";
+        };
+        B39930B0B722CEC537811850 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "Tests/QAAcceptanceTests.swift";
+            sourceTree = "<group>";
+        };
+        B4336BF6C38FF53FB953351C = {
+            isa = PBXFileReference;
+            lastKnownFileType = "text.json";
+            path = "AnimeSync/Resources/Fonts/Roboto-source.json";
+            sourceTree = "<group>";
+        };
+        B75C4BF5AA0417AAF7251180 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Provider/ProviderBridge.swift";
+            sourceTree = "<group>";
+        };
+        BE8C3CDA55E1A05A5CB7C4DA = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = 2E00D6E663543C82E15C8678;
+            buildPhases = (E1254D0ED4EC3D8FB6A04FFE, E5349F030BE426E657FDEEB6, 53C6F494B31FE0C0C03B75A2);
+            buildRules = ();
+            dependencies = (2491A28A021FE17A1372DB6A);
+            name = "AnimeSyncTests";
+            productName = "AnimeSyncTests";
+            productReference = 3B0BE3A0F91DA25CEF6C11C5;
+            productType = "com.apple.product-type.bundle.unit-test";
+        };
+        C7D9C44ACACCFE0BDE47F00B = {
+            isa = PBXBuildFile;
+            fileRef = 767FC53C4DA786EAAB6CF402;
+        };
+        C98778D84D96FC06A868E5D5 = {
+            isa = PBXBuildFile;
+            fileRef = 805AB9EA654D5A2DF2E90B9A;
+        };
+        CE27EDF6D872077AA67BC868 = {
+            isa = PBXBuildFile;
+            fileRef = 5DD10CF230F50FC3D49A209B;
+        };
+        D033775B40294D3739A269F5 = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = "Automatic";
+                CURRENT_PROJECT_VERSION = "8";
+                MARKETING_VERSION = "0.1.7";
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+                TARGETED_DEVICE_FAMILY = "1";
+                LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks");
+                SWIFT_VERSION = "5.0";
+                OTHER_SWIFT_FLAGS = ("$(inherited)", "-Xfrontend", "-warn-long-expression-type-checking=200", "-Xfrontend", "-warn-long-function-bodies=500");
+                GENERATE_INFOPLIST_FILE = YES;
+                PRODUCT_BUNDLE_IDENTIFIER = "xyz.loibaks.animecompanion.ios.tests";
+                PRODUCT_MODULE_NAME = "AnimeSyncTests";
+                TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AnimeSync.app/AnimeSync";
+                BUNDLE_LOADER = "$(TEST_HOST)";
+                SWIFT_OPTIMIZATION_LEVEL = "-O";
+                DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+                SWIFT_COMPILATION_MODE = "wholemodule";
+            };
+            name = "Release";
+        };
+        D0E1E2C3018ECE55C1382E2D = {
+            isa = PBXBuildFile;
+            fileRef = 147C980F793B726D30681C10;
+        };
+        D60409337774CCE94860379A = {
+            isa = PBXGroup;
+            name = "Tests";
+            children = (6DDF5EA27ADB8873E5D15086, 860A52F5357752593D0FA61D, 352A54F676B4A687726203F6, 1F50083C512631649BCD5715, 0B39799CBA505CBAC4E8E77F, B39930B0B722CEC537811850);
+            sourceTree = "<group>";
+        };
+        D695B4DEADB6979B3EFA0935 = {
+            isa = PBXBuildFile;
+            fileRef = ED7607FB223A10599A3B87FE;
+        };
+        DBA0F0513D9EFFF8AED3AF5A = {
+            isa = PBXBuildFile;
+            fileRef = 0B39799CBA505CBAC4E8E77F;
+        };
+        DF02E7DA679EC4B055A30C47 = {
+            isa = XCConfigurationList;
+            buildConfigurations = (6BDB0417C9509287DCE2BED0, 934B484B36ECB0EF51DFB39B);
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = "Release";
+        };
+        DFA1FE355B7EEABE1D1E668D = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = "Automatic";
+                CURRENT_PROJECT_VERSION = "8";
+                MARKETING_VERSION = "0.1.7";
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+                TARGETED_DEVICE_FAMILY = "1";
+                LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks");
+                SWIFT_VERSION = "5.0";
+                OTHER_SWIFT_FLAGS = ("$(inherited)", "-Xfrontend", "-warn-long-expression-type-checking=200", "-Xfrontend", "-warn-long-function-bodies=500");
+                GENERATE_INFOPLIST_FILE = YES;
+                PRODUCT_BUNDLE_IDENTIFIER = "xyz.loibaks.animecompanion.ios.tests";
+                PRODUCT_MODULE_NAME = "AnimeSyncTests";
+                TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AnimeSync.app/AnimeSync";
+                BUNDLE_LOADER = "$(TEST_HOST)";
+                SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+                DEBUG_INFORMATION_FORMAT = "dwarf";
+                SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+                ENABLE_TESTABILITY = YES;
+            };
+            name = "Debug";
+        };
+        E1254D0ED4EC3D8FB6A04FFE = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (2A0614FA0CDCB2EC7DA8A666, 1CD7384555B5176E9F5ACF26, 69C752904C491A3C85E27B0D, F5C491B282FFFD22138DCC59, DBA0F0513D9EFFF8AED3AF5A);
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        E3091FDF741F176176162E4F = {
+            isa = PBXFrameworksBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        E5349F030BE426E657FDEEB6 = {
+            isa = PBXFrameworksBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        ED32268F0215464A9BE0E189 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/QAFixture.swift";
+            sourceTree = "<group>";
+        };
+        ED7607FB223A10599A3B87FE = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Provider/AnimeSyncDashboard.swift";
+            sourceTree = "<group>";
+        };
+        EEC3D1B6106CB11B5AEA89F1 = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = 87F24AD96FC90E9D3CDB2497;
+            buildPhases = (F77DFAC50C8D01B2ABDC15DF, E3091FDF741F176176162E4F, 0E6C9D49C9CA1CDBCA31E8DE);
+            buildRules = ();
+            dependencies = ();
+            name = "AnimeSync";
+            productName = "AnimeSync";
+            productReference = 2ACDEF8B30377F8F175E496C;
+            productType = "com.apple.product-type.application";
+        };
+        F044962EECA1517718F4583A = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "AnimeSync/Core/CoreSecrets.swift";
+            sourceTree = "<group>";
+        };
+        F24A43A4F593522D1FD62E5F = {
+            isa = PBXBuildFile;
+            fileRef = 8DF8F3098A39968A482DD0A6;
+        };
+        F5C491B282FFFD22138DCC59 = {
+            isa = PBXBuildFile;
+            fileRef = 1F50083C512631649BCD5715;
+        };
+        F67EB52F1DD004EFCFBFDA14 = {
+            isa = PBXBuildFile;
+            fileRef = 2E6A93CE0796C48A7FF0133B;
+        };
+        F77DFAC50C8D01B2ABDC15DF = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (3A2B0B505D8C0BF64526D6A2, F24A43A4F593522D1FD62E5F, AF007BEE17D20221BA2913C5, 8E35F39F8F2DFA6F07E4836F, 54E1F86D3FE21109BDF82322, 87A2FDBDA18D058E3FC6590A, 91B2CA025A54C53441085EFD, 79E923A1D6E20614A4F41945, CE27EDF6D872077AA67BC868, 63EBD014EA8BE3E2EE362B8B, C7D9C44ACACCFE0BDE47F00B, D695B4DEADB6979B3EFA0935, 2BF1D743F2E2F40424750AF9, 61281ED80D33C20C735815ED, F67EB52F1DD004EFCFBFDA14, F899982FB1E80528F3ECC127, C98778D84D96FC06A868E5D5, 6BE62CD0820A946B8CE7500C, 49E6C9BC8A392A83496F3FB7, 489FA9FD44859C79D7032570, 276C0497DAC63E88D797C6E9, 17584151FCFD832CEEB20381);
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        F899982FB1E80528F3ECC127 = {
+            isa = PBXBuildFile;
+            fileRef = B75C4BF5AA0417AAF7251180;
+        };
+    };
+    rootObject = 244210E48437B6556980A702;
+}

@@ -1,0 +1,13 @@
+{
+  "family": "Roboto",
+  "style": "Bold",
+  "postScriptName": "Roboto-Bold",
+  "release": "v3.015",
+  "archiveURL": "https://github.com/googlefonts/roboto-3-classic/releases/download/v3.015/Roboto_v3.015.zip",
+  "archiveSHA256": "bee3e9334ea86dd63e184598f31fb16750881c2da1a6f097a66e0f66a95b3d54",
+  "archiveMember": "hinted/static/Roboto-Bold.ttf",
+  "fontSHA256": "070615f757a610d4042a0330402f7df76d9627f1b857ebfbfb76e00a5b00d865",
+  "licenseURL": "https://raw.githubusercontent.com/googlefonts/roboto-3-classic/v3.015/OFL.txt",
+  "licenseSHA256": "061402327a96aadb0bfb694a960ed289ecd38d383e396243831ab81feb109c41",
+  "usage": "Shared unmodified subtitle face; visual match, not a verified identification of the Miruro website font."
+}

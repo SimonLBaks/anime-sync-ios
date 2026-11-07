@@ -1,0 +1,13 @@
+.DS_Store
+DerivedData/
+dist/
+__pycache__/
+*.pyc
+xcuserdata/
+*.xcuserstate
+AnimeSync/Resources/Assets.xcassets/AppIcon.appiconset/app-icon.png
+.build/
+.swiftpm/
+artifacts/
+.private/
+AnimeSync/Resources/Deployment.json
