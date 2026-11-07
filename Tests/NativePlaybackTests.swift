@@ -106,11 +106,27 @@ import CoreMedia
         XCTAssertTrue(toolbar.visible)
         first.open(); for _ in 0..<8 { await Task.yield() }
         XCTAssertFalse(toolbar.visible)
-        toolbar.reveal()
+        toolbar.toggleFromVideoTap()
         XCTAssertTrue(toolbar.visible)
         await fulfillment(of: [second.started],timeout: 2)
         second.open(); for _ in 0..<8 { await Task.yield() }
         XCTAssertFalse(toolbar.visible); XCTAssertEqual(starts,2)
+    }
+
+    func testVideoTapTogglesPausedControlsAndKeepsModalAndVoiceOverControlsVisible() {
+        let toolbar = PlaybackToolbarState { _ in XCTFail("Paused playback must not schedule auto-hide") }
+        toolbar.update(playing: false,active: true,presenting: false,voiceOver: false)
+        toolbar.toggleFromVideoTap()
+        XCTAssertFalse(toolbar.visible)
+        toolbar.update(playing: false,active: true,presenting: false,voiceOver: false)
+        XCTAssertFalse(toolbar.visible,"A repeated paused update must preserve manual dismissal")
+        toolbar.toggleFromVideoTap()
+        XCTAssertTrue(toolbar.visible)
+        for state in [(true,true,false),(true,false,true),(false,false,false)] {
+            toolbar.update(playing: false,active: state.0,presenting: state.1,voiceOver: state.2)
+            toolbar.toggleFromVideoTap()
+            XCTAssertTrue(toolbar.visible)
+        }
     }
 
     func testToolbarPausePresentationVoiceOverAndDisappearanceCancelOldDeadlines() async {

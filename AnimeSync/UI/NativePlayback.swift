@@ -3,8 +3,8 @@ import AVKit
 import Combine
 import CoreMedia
 
-/// Only hides while video is actually playing. A revision fences a completed
-/// old timer even when its sleeper ignores cancellation during a UI transition.
+/// Auto-hides while video is playing and also accepts an explicit video tap.
+/// A revision fences an old timer even when its sleeper ignores cancellation.
 @MainActor final class PlaybackToolbarState: ObservableObject {
     @Published private(set) var visible = true
     private var playing = false
@@ -18,23 +18,31 @@ import CoreMedia
     func update(playing: Bool,active: Bool,presenting: Bool,voiceOver: Bool) {
         let changed = self.playing != playing || self.active != active || self.presenting != presenting || self.voiceOver != voiceOver
         self.playing = playing; self.active = active; self.presenting = presenting; self.voiceOver = voiceOver
-        if !canHide { cancel(); visible = true }
-        else if changed { reveal() }
+        if changed { reveal() }
     }
-    func reveal() {
+    func toggleFromVideoTap(hideAfter delay: UInt64? = nil) {
+        guard canToggle else { return }
+        if visible {
+            cancel(); visible = false
+        } else {
+            reveal(hideAfter: delay)
+        }
+    }
+    func reveal(hideAfter delay: UInt64? = nil) {
         visible = true; cancel()
-        guard canHide else { return }
+        guard canAutoHide else { return }
         let captured = revision, sleep = sleep
         hideTask = Task { [weak self] in
             do {
-                try await sleep(4_000_000_000)
-                guard !Task.isCancelled, let self, self.revision == captured, self.canHide else { return }
+                try await sleep(delay ?? 4_000_000_000)
+                guard !Task.isCancelled, let self, self.revision == captured, self.canAutoHide else { return }
                 self.visible = false; self.hideTask = nil
             } catch { }
         }
     }
     func stop() { active = false; cancel(); visible = true }
-    private var canHide: Bool { playing && active && !presenting && !voiceOver }
+    private var canToggle: Bool { active && !presenting && !voiceOver }
+    private var canAutoHide: Bool { playing && canToggle }
     private func cancel() { revision &+= 1; hideTask?.cancel(); hideTask = nil }
 }
 
@@ -882,7 +890,14 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
         let layout = chromeLayout(in: geometry)
         return ZStack {
             Color.black
-            NativePlayerController(model: model,onVideoTap: { toolbar.reveal() },controlsFrame: toolbar.visible ? layout.dock : nil,
+            NativePlayerController(model: model,onVideoTap: {
+                #if DEBUG
+                // XCTest waits for idleness before delivering each tap.
+                toolbar.toggleFromVideoTap(hideAfter: model.fixture ? 15_000_000_000 : nil)
+                #else
+                toolbar.toggleFromVideoTap()
+                #endif
+            },controlsFrame: toolbar.visible ? layout.dock : nil,
                                    headerFrame: toolbar.visible ? layout.header : nil,geometry: videoGeometry)
             if toolbar.visible, !videoGeometry.safeViewport.isEmpty {
                 chrome(layout: layout,compact: geometry.size.width > geometry.size.height).transition(.opacity)

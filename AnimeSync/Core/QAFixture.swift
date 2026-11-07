@@ -222,6 +222,7 @@ import Combine
             }
             let groups: [JSONValue] = [.object(["name": .string("Audio"),"items": .array(audio)]),.object(["name": .string("Provider"),"items": .array(sources)])]
             provider.receiveFixture(["type": .string("source-choices"),"groups": .array(groups)])
+            provider.receiveFixture(["type": .string("source"), "url": .string("https://example.invalid/qa-alternate.m3u8"), "mime": .string("application/vnd.apple.mpegurl"), "confirmed": .bool(false)])
             provider.receiveFixture(["type": .string("source"), "url": .string(Self.mediaURL.absoluteString), "mime": .string("application/vnd.apple.mpegurl"), "confirmed": .bool(true)])
             return
         }

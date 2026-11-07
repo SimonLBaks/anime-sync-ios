@@ -1,6 +1,6 @@
 {
-  "version": "0.1.8",
-  "build": 9,
-  "reason": "Narrow and slim the landscape controls while preserving touch targets, centered transport, the timeline timer and caption clearance.",
-  "simulator": "Run 102 app unit tests and 10 deterministic UI fixtures. Verify the compact layout, actual playback and seek, and TV pairing validation."
+  "version": "0.1.9",
+  "build": 10,
+  "reason": "Toggle native playback controls with a video tap, including while paused.",
+  "simulator": "Verify tap-to-hide, compact layout, first-ranked source playback without a prompt, actual seeking, and TV pairing."
 }
