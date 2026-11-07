@@ -190,7 +190,8 @@ final class QAAcceptanceTests: XCTestCase {
         XCTAssertTrue(viewport.contains(image)); XCTAssertTrue(viewport.contains(dock))
         XCTAssertTrue(image.insetBy(dx: -1,dy: -1).contains(text),"Captions must remain inside the actual displayed video, including a pillarboxed source")
         XCTAssertLessThan(text.width,image.width - 8,"The caption element must fit text instead of becoming a full-width subtitle strip")
-        if dock.intersects(image) { XCTAssertLessThanOrEqual(text.maxY,dock.minY - 8,"Visible playback controls must not cross a caption line") }
+        XCTAssertFalse(text.intersects(dock),"Visible playback controls must not cross a caption line")
+        XCTAssertLessThanOrEqual(image.maxY - text.maxY,max(7,image.height * 0.06),"Standard captions stay close to the lower picture edge")
         let back = element(app,"player.close").frame, subtitles = element(app,"player.subtitles").frame
         XCTAssertTrue(viewport.contains(back)); XCTAssertTrue(viewport.contains(subtitles))
         XCTAssertTrue(back.intersection(subtitles).isNull || back.intersection(subtitles).isEmpty)
@@ -598,7 +599,7 @@ final class QAAcceptanceTests: XCTestCase {
         let originalCaptionFrame = caption.frame
         screenshot(app, "fixture-external-vtt-rendered")
         element(app, "player.subtitles").tap()
-        for id in ["player.subtitle.larger", "player.subtitle.raise", "player.subtitle.style"] {
+        for id in ["player.subtitle.larger", "player.subtitle.raise"] {
             let action = element(app, id)
             XCTAssertTrue(action.waitForExistence(timeout: 3)); expose(action,in: settings); action.tap()
         }

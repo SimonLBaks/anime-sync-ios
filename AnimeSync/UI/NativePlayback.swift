@@ -57,6 +57,27 @@ enum NativeCaptionPolicy {
     }
 }
 
+private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPushDelegate {
+    // AVFoundation invokes this delegate on the main queue supplied below.
+    let output = AVPlayerItemLegibleOutput(mediaSubtypesForNativeRepresentation: [])
+    private let receive: @MainActor ([String]) -> Void
+
+    init(receive: @escaping @MainActor ([String]) -> Void) {
+        self.receive = receive
+        super.init()
+        output.setDelegate(self,queue: .main)
+    }
+
+    func legibleOutput(_ output: AVPlayerItemLegibleOutput,didOutputAttributedStrings strings: [NSAttributedString],
+                       nativeSampleBuffers: [Any],forItemTime itemTime: CMTime) {
+        MainActor.assumeIsolated { receive(strings.map(\.string)) }
+    }
+
+    func outputSequenceWasFlushed(_ output: AVPlayerItemOutput) {
+        MainActor.assumeIsolated { receive([]) }
+    }
+}
+
 @MainActor final class NativePlaybackModel: ObservableObject, Identifiable {
     let id = UUID()
     let metadata: AnimeMetadata
@@ -72,8 +93,8 @@ enum NativeCaptionPolicy {
     #endif
     @Published var captionText = ""
     @Published var captionSize: Double { didSet { if !fixture { UserDefaults.standard.set(captionSize,forKey: "caption.size") }; applyStyles() } }
-    @Published var captionMargin: Double { didSet { if !fixture { UserDefaults.standard.set(captionMargin,forKey: "caption.margin") }; applyStyles() } }
-    @Published var originalStyles: Bool { didSet { if !fixture { UserDefaults.standard.set(originalStyles,forKey: "caption.original") }; applyStyles() } }
+    @Published var captionMargin: Double { didSet { if !fixture { UserDefaults.standard.set(captionMargin,forKey: "caption.bottomMargin") } } }
+    @Published var originalStyles: Bool { didSet { if !fixture { UserDefaults.standard.set(originalStyles,forKey: "caption.sourcePlacement") }; applyStyles(); refreshCaption() } }
     @Published var captionDelay: Double = 0 { didSet { refreshCaption() } }
     @Published var captionSelection = "automatic"
     @Published var embeddedOptions: [AVMediaSelectionOption] = []
@@ -119,13 +140,16 @@ enum NativeCaptionPolicy {
     private var scrubDeadline: TimeInterval = 0
     private var positionBeforeScrub: TimeInterval?
     private var controlSeekRevision: UInt64 = 0
-    private var embeddedControlMargin: Double = 0
+    private var embeddedOutput: EmbeddedCaptionOutput?
+    private var embeddedCaption = ""
     private var cues: [SubtitleCue] = []
     private var periodicCount = 0
     var onFallback: (() -> Void)?
     var onClose: (() -> Void)?
     var position: TimeInterval { let x = clock?().position ?? player.currentTime().seconds; return x.isFinite ? max(0,x) : 0 }
     var duration: TimeInterval { let x = clock?().duration ?? player.currentItem?.duration.seconds ?? 0; return x.isFinite ? max(0,x) : 0 }
+    var captionsEnabled: Bool { captionSelection != "off" && (!subtitles.isEmpty || !embeddedOptions.isEmpty) }
+    var showingExternalCaption: Bool { !cues.isEmpty }
     var canSeek: Bool { !disposed && !closing && videoReady && player.currentItem != nil && duration > 0 && !restoring && !isStarting && !handoffInProgress && !isSeeking }
 
     init(metadata: AnimeMetadata, source: MediaSource, subtitles: [SubtitleSource], sync: SyncService, fixture: Bool = false, position: TimeInterval? = nil, generation: Int64? = nil, clock: (() -> (position: TimeInterval, duration: TimeInterval))? = nil, captionTransport: HTTPTransport? = nil, seekOperation: ((AVPlayer, TimeInterval) async -> Void)? = nil) {
@@ -143,8 +167,10 @@ enum NativeCaptionPolicy {
         #endif
         self.explicitPosition = position; self.pendingGeneration = generation; self.clock = clock; self.seekOperation = seekOperation
         captionSize = fixture ? 22 : UserDefaults.standard.object(forKey: "caption.size") as? Double ?? 22
-        captionMargin = fixture ? 0.1 : UserDefaults.standard.object(forKey: "caption.margin") as? Double ?? 0.1
-        originalStyles = fixture ? false : UserDefaults.standard.bool(forKey: "caption.original")
+        let savedMargin = UserDefaults.standard.object(forKey: "caption.bottomMargin") as? Double
+        let legacyMargin = UserDefaults.standard.object(forKey: "caption.margin") as? Double
+        captionMargin = fixture ? NativeCaptionLayout.defaultMargin : NativeCaptionLayout.margin(savedMargin ?? NativeCaptionLayout.migrateMargin(legacyMargin))
+        originalStyles = !fixture && UserDefaults.standard.bool(forKey: "caption.sourcePlacement")
         player.isMuted = fixture; player.allowsExternalPlayback = false
         observers.append(player.observe(\.rate, options: [.new]) { [weak self] _, change in Task { @MainActor in self?.rateChanged(change.newValue ?? 0) } })
         ticks = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25,preferredTimescale: 600),queue: .main) { [weak self] _ in
@@ -194,10 +220,21 @@ enum NativeCaptionPolicy {
                 guard let self, self.player.currentItem === item else { return }
                 if item.status == .failed { self.player.pause(); self.message = "This source could not play. Try another source or the website player."; self.release() }
             } })
+            installEmbeddedCaptionOutput(on: item)
             player.replaceCurrentItem(with: item); applyStyles()
             Task { [weak self] in await self?.readEmbeddedTracks(item) }
             await play(explicit: true,expectedGeneration: pendingGeneration)
         } catch { message = error.localizedDescription }
+    }
+    func installEmbeddedCaptionOutput(on item: AVPlayerItem) {
+        let adapter = EmbeddedCaptionOutput { [weak self,weak item] strings in
+            guard let self, let item, self.player.currentItem === item, !self.disposed, !self.closing else { return }
+            self.embeddedCaption = SubtitleText.dialogue(strings)
+            self.refreshCaption()
+        }
+        adapter.output.suppressesPlayerRendering = !originalStyles
+        embeddedOutput = adapter
+        item.add(adapter.output)
     }
     private func readEmbeddedTracks(_ item: AVPlayerItem) async {
         do {
@@ -207,7 +244,7 @@ enum NativeCaptionPolicy {
             embeddedTracksResolved = true
             guard automaticCaptions else { return }
             if let group, let english = group.options.first(where: { NativeCaptionPolicy.isEnglish($0.extendedLanguageTag ?? $0.locale?.identifier ?? "") }) {
-                subtitleEpoch &+= 1; cueTask?.cancel(); cues = []; captionText = ""; captionSelection = "automatic"; activeSubtitleRequest = nil
+                subtitleEpoch &+= 1; cueTask?.cancel(); cues = []; embeddedCaption = ""; captionText = ""; captionSelection = "automatic"; activeSubtitleRequest = nil
                 item.select(english,in: group)
             } else { selectAutomaticExternal() }
         } catch {
@@ -391,11 +428,16 @@ enum NativeCaptionPolicy {
         await save(); release(); disposed = true; handoffInProgress = false
         if let ticks { player.removeTimeObserver(ticks) }; ticks = nil
         observers.removeAll(); notifications.forEach(NotificationCenter.default.removeObserver); notifications.removeAll()
+        if let embeddedOutput { player.currentItem?.remove(embeddedOutput.output) }
+        embeddedOutput = nil
         player.replaceCurrentItem(with: nil); mediaBridge?.stop(); mediaBridge = nil
     }
     private func refreshCaption() {
         guard !disposed else { return }
-        let caption = SubtitleText.active(cues,at: position - captionDelay)
+        let caption: String
+        if captionSelection == "off" { caption = "" }
+        else if !cues.isEmpty { caption = SubtitleText.active(cues,at: position - captionDelay) }
+        else { caption = originalStyles ? "" : embeddedCaption }
         if caption != captionText { captionText = caption }
     }
     /// The owner fences provider navigation/episode identity before delivering
@@ -423,7 +465,8 @@ enum NativeCaptionPolicy {
         automaticCaptions = automatic
         activeSubtitleRequest = source.map(SubtitleRequestIdentity.init)
         subtitleEpoch &+= 1; let epoch = subtitleEpoch
-        cueTask?.cancel(); cues = []; captionText = ""; captionSelection = source?.id ?? "off"
+        cueTask?.cancel(); cues = []; captionSelection = source?.id ?? "off"
+        refreshCaption()
         guard let source else {
             Task { [weak self] in await self?.deselectEmbedded(for: epoch) }
             return
@@ -455,23 +498,25 @@ enum NativeCaptionPolicy {
     }
     private func deselectEmbedded(for epoch: UInt64) async {
         if let item = player.currentItem, let group = try? await item.asset.loadMediaSelectionGroup(for: .legible),
-           !disposed, !closing, epoch == subtitleEpoch, player.currentItem === item { item.select(nil,in: group) }
+           !disposed, !closing, epoch == subtitleEpoch, player.currentItem === item {
+            item.select(nil,in: group)
+            embeddedCaption = ""; refreshCaption()
+        }
     }
     func selectEmbedded(_ option: AVMediaSelectionOption?) {
         guard !disposed, !closing else { return }
         automaticCaptions = false
         activeSubtitleRequest = nil
         subtitleEpoch &+= 1; let epoch = subtitleEpoch
-        cueTask?.cancel(); cues = []; captionText = ""; captionSelection = "embedded"
+        cueTask?.cancel(); cues = []; embeddedCaption = ""; captionText = ""; captionSelection = option.map { "embedded:" + $0.displayName } ?? "off"
         guard let item = player.currentItem else { return }
         Task { [weak self] in if let group = try? await item.asset.loadMediaSelectionGroup(for: .legible), let self, !self.disposed, epoch == self.subtitleEpoch, self.player.currentItem === item { item.select(option,in: group) } }
     }
     func applyStyles() {
         guard let item = player.currentItem else { return }
-        // The common appearance applies even to older saved "original" settings.
-        // Author placement is optional; the shared face/size and clear backdrop
-        // remain consistent even with an older saved original-style preference.
-        var attributes: [String:Any] = [
+        embeddedOutput?.output.suppressesPlayerRendering = !originalStyles
+        // The source-placement option still uses the shared font and outline.
+        let attributes: [String:Any] = [
             kCMTextMarkupAttribute_FontFamilyName as String: "Roboto",
             kCMTextMarkupAttribute_BoldStyle as String: true,
             kCMTextMarkupAttribute_RelativeFontSize as String: captionSize / 22 * 100,
@@ -480,25 +525,21 @@ enum NativeCaptionPolicy {
             kCMTextMarkupAttribute_CharacterBackgroundColorARGB as String: [0.0,0.0,0.0,0.0],
             kCMTextMarkupAttribute_CharacterEdgeStyle as String: kCMTextMarkupCharacterEdgeStyle_Uniform
         ]
-        if !originalStyles || embeddedControlMargin > 0 {
-            attributes[kCMTextMarkupAttribute_OrthogonalLinePositionPercentageRelativeToWritingDirection as String] = (1 - max(captionMargin,embeddedControlMargin)) * 100
-        }
         item.textStyleRules = AVTextStyleRule(textMarkupAttributes: attributes).map { [$0] }
-    }
-    func updateCaptionViewport(video: CGRect,controls: CGRect?) {
-        guard !disposed, video.height > 0 else { return }
-        var margin = 0.0
-        if let controls, controls.intersects(video) {
-            let lineAllowance = NativeCaptionLayout.fontSize(preference: captionSize,videoHeight: video.height) * 1.5
-            margin = min(0.7,max(0,Double((video.maxY - controls.minY + lineAllowance + 12) / video.height)))
-        }
-        if abs(margin - embeddedControlMargin) > 0.001 { embeddedControlMargin = margin; applyStyles() }
     }
 }
 
 /// All geometry is in the host view's coordinates. Captions follow the actual
 /// displayed image, never the letterbox/pillarbox or an assumed screen ratio.
 enum NativeCaptionLayout {
+    static let defaultMargin = 0.05
+    static let step = 0.025
+    static func margin(_ value: Double) -> Double { value.isFinite ? min(0.20,max(0.025,value)) : defaultMargin }
+    static func migrateMargin(_ old: Double?) -> Double { margin((old ?? 0.10) * 0.5) }
+    static func bottomInset(region: CGRect,margin: Double) -> CGFloat { max(6,region.height * CGFloat(Self.margin(margin))) }
+    static func laneHeight(region: CGRect,fontSize: CGFloat,margin: Double) -> CGFloat {
+        bottomInset(region: region,margin: margin) + ceil(fontSize * 2.7) + 8
+    }
     static func region(video: CGRect,viewport: CGRect,safeInsets: UIEdgeInsets) -> CGRect {
         guard video.minX.isFinite, video.minY.isFinite, video.width.isFinite, video.height.isFinite, video.width > 0, video.height > 0 else { return .zero }
         let result = video.intersection(viewport.inset(by: safeInsets))
@@ -511,9 +552,11 @@ enum NativeCaptionLayout {
     static func available(region: CGRect,margin: Double,controls: CGRect?,header: CGRect? = nil) -> CGRect {
         guard region.width > 0, region.height > 0 else { return .zero }
         var top = region.minY + 4
-        var bottom = region.maxY - max(8,region.height * CGFloat(min(0.45,max(0.025,margin))))
+        var bottom = region.maxY - bottomInset(region: region,margin: margin)
         if let controls, !controls.isEmpty, controls.intersects(region) {
-            bottom = min(bottom,controls.minY - 12)
+            let lowerTop = controls.maxY + 6
+            if bottom - lowerTop >= min(22,region.height * 0.10) { top = max(top,lowerTop) }
+            else { bottom = min(bottom,controls.minY - 12) }
         }
         if let header, !header.isEmpty, header.intersects(region) { top = max(top,header.maxY + 8) }
         guard bottom > top, region.width > 16 else { return .zero }
@@ -614,7 +657,7 @@ enum NativeCaptionLayout {
 struct NativeChromeLayout {
     let header: CGRect
     let dock: CGRect
-    static func fitted(video: CGRect,viewport: CGRect,safeInsets: UIEdgeInsets,safeViewport: CGRect? = nil,headerHeight: CGFloat = 44,dockHeight: CGFloat = 96) -> NativeChromeLayout {
+    static func fitted(video: CGRect,viewport: CGRect,safeInsets: UIEdgeInsets,safeViewport: CGRect? = nil,headerHeight: CGFloat = 44,dockHeight: CGFloat = 96,captionLane: CGFloat = 0) -> NativeChromeLayout {
         let safe = (safeViewport ?? viewport.inset(by: safeInsets)).intersection(viewport)
         guard safe.width > 0, safe.height > 0 else { return NativeChromeLayout(header: .zero,dock: .zero) }
         let clipped = video.intersection(safe)
@@ -626,7 +669,11 @@ struct NativeChromeLayout {
         let top = content.minY - safe.minY >= headerHeight + gap ? content.minY - headerHeight - gap : content.minY + gap
         let bottom = safe.maxY - content.maxY >= dockHeight + gap ? content.maxY + gap : content.maxY - dockHeight - gap
         let headerY = max(safe.minY,min(safe.maxY - headerHeight,top))
-        let dockY = max(safe.minY,min(safe.maxY - dockHeight,bottom))
+        var dockY = max(safe.minY,min(safe.maxY - dockHeight,bottom))
+        if bottom < content.maxY, captionLane > 0 {
+            let lifted = content.maxY - captionLane - dockHeight
+            if lifted >= headerY + headerHeight + gap { dockY = min(dockY,lifted) }
+        }
         return NativeChromeLayout(header: CGRect(x: left,y: headerY,width: width,height: headerHeight),
                                   dock: CGRect(x: left,y: dockY,width: width,height: dockHeight))
     }
@@ -649,7 +696,7 @@ enum NativeSafeArea {
     let caption = NativeOutlinedCaptionLabel()
     var captionText = ""
     var captionSize: Double = 22
-    var captionMargin: Double = 0.1
+    var captionMargin = NativeCaptionLayout.defaultMargin
     var controlsFrame: CGRect?
     var headerFrame: CGRect?
     weak var model: NativePlaybackModel?
@@ -694,7 +741,6 @@ enum NativeSafeArea {
         #if DEBUG
         qaVideoRegion.frame = region
         #endif
-        model?.updateCaptionViewport(video: video,controls: controlsFrame)
         guard !captionText.isEmpty, region.width > 0, region.height > 0 else { caption.isHidden = true; return }
         let space = NativeCaptionLayout.available(region: region,margin: captionMargin,controls: controlsFrame,header: headerFrame)
         guard space.width > 8, space.height > 4 else { caption.isHidden = true; return }
@@ -993,10 +1039,13 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     }
     private func chromeLayout(in geometry: GeometryProxy) -> NativeChromeLayout {
         let insets = geometry.safeAreaInsets
+        let region = videoGeometry.region
+        let captionLane = model.captionsEnabled && (!model.originalStyles || model.showingExternalCaption)
+            ? NativeCaptionLayout.laneHeight(region: region,fontSize: NativeCaptionLayout.fontSize(preference: model.captionSize,videoHeight: region.height),margin: model.captionMargin) : 0
         return NativeChromeLayout.fitted(video: videoGeometry.region,viewport: CGRect(origin: .zero,size: geometry.size),
                                          safeInsets: UIEdgeInsets(top: insets.top,left: insets.leading,bottom: insets.bottom,right: insets.trailing),
                                          safeViewport: videoGeometry.safeViewport.isEmpty ? nil : videoGeometry.safeViewport,
-                                         dockHeight: transportHeight)
+                                         dockHeight: transportHeight,captionLane: captionLane)
     }
     private func chrome(layout: NativeChromeLayout,compact: Bool) -> some View {
         ZStack(alignment: .topLeading) {
@@ -1054,25 +1103,52 @@ struct SubtitleSettings: View {
         NavigationStack {
             Form {
                 Section("Tracks") {
-                    Button("Off") { model.selectSubtitle(nil) }.accessibilityIdentifier("player.subtitle.off")
-                    ForEach(Array(model.embeddedOptions.enumerated()),id: \.offset) { _,option in Button(option.displayName) { model.selectEmbedded(option) } }
+                    choice("Off",selected: model.captionSelection == "off") { model.selectSubtitle(nil) }
+                        .accessibilityIdentifier("player.subtitle.off")
+                    ForEach(Array(model.embeddedOptions.enumerated()),id: \.offset) { _,option in
+                        choice(option.displayName,selected: model.captionSelection == "embedded:" + option.displayName) { model.selectEmbedded(option) }
+                    }
                     ForEach(Array(model.subtitles.enumerated()),id: \.offset) { index,source in
-                        Button(source.label) { model.selectSubtitle(source) }.accessibilityIdentifier("player.subtitle.track.\(index)")
+                        choice(source.label,selected: model.captionSelection == source.id) { model.selectSubtitle(source) }
+                            .accessibilityIdentifier("player.subtitle.track.\(index)")
                     }
                     if model.embeddedOptions.isEmpty && model.subtitles.isEmpty { Text("No selectable subtitles found for this source.") }
                 }
                 Section("Appearance") {
-                    Stepper("Size \(Int(model.captionSize))",value: $model.captionSize,in: 14...44,step: 2)
-                    Button("Larger subtitles") { model.captionSize = min(44,model.captionSize + 2) }.accessibilityIdentifier("player.subtitle.larger")
-                    Button("Raise subtitles") { model.captionMargin = min(0.45,model.captionMargin + 0.025) }.accessibilityIdentifier("player.subtitle.raise")
-                    Button("Lower subtitles") { model.captionMargin = max(0.025,model.captionMargin - 0.025) }
-                    Toggle("Original embedded placement",isOn: $model.originalStyles).accessibilityIdentifier("player.subtitle.style")
-                    Slider(value: $model.captionDelay,in: -10...10,step: 0.5)
-                    Text(String(format: "Subtitle timing: %+.1f s",model.captionDelay)).font(.footnote)
-                    if model.subtitles.contains(where: { ["ass","ssa"].contains($0.url.pathExtension.lowercased()) }) { Text("ASS tracks use plain text here; complex typesetting may look different. Baked-in subtitles cannot be changed.").font(.footnote) }
+                    let sizes: [(String,Double)] = [("Small",17),("Medium",22),("Large",27),("Extra large",32)]
+                    ForEach(sizes.indices,id: \.self) { index in
+                        choice(sizes[index].0,selected: abs(model.captionSize - sizes[index].1) < 0.5) { model.captionSize = sizes[index].1 }
+                            .accessibilityIdentifier(index == 2 ? "player.subtitle.larger" : "player.subtitle.size.\(index)")
+                    }
+                    Button("Raise subtitles") { model.captionMargin = NativeCaptionLayout.margin(model.captionMargin + NativeCaptionLayout.step) }.accessibilityIdentifier("player.subtitle.raise")
+                    Button("Lower subtitles") { model.captionMargin = NativeCaptionLayout.margin(model.captionMargin - NativeCaptionLayout.step) }
+                    Button("Reset position") { model.captionMargin = NativeCaptionLayout.defaultMargin }
+                }
+                if !model.embeddedOptions.isEmpty || model.showingExternalCaption {
+                    Section {
+                        DisclosureGroup("Advanced") {
+                            if !model.embeddedOptions.isEmpty {
+                                Toggle("Use source placement",isOn: $model.originalStyles).accessibilityIdentifier("player.subtitle.style")
+                            }
+                            if model.showingExternalCaption {
+                                Slider(value: $model.captionDelay,in: -10...10,step: 0.5)
+                                    .accessibilityLabel("Subtitle timing")
+                                Text(String(format: "Subtitle timing: %+.1f s",model.captionDelay)).font(.footnote)
+                            }
+                        }
+                    }
                 }
             }.accessibilityIdentifier("player.subtitle.settings").navigationTitle("Subtitles").toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.accessibilityIdentifier("player.subtitle.done") } }
         }.preferredColorScheme(.dark)
+    }
+    private func choice(_ name: String,selected: Bool,action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(name)
+                Spacer()
+                if selected { Image(systemName: "checkmark").accessibilityHidden(true) }
+            }
+        }.accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 

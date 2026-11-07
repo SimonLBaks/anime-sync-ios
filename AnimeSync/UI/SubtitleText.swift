@@ -25,6 +25,10 @@ enum SubtitleText {
         text.range(of: #"^[^\s]+\.(?:avif|gif|jpe?g|png|webp)(?:\?[^\s#]*)?#xywh=(?:(?:pixel|percent):)?[0-9]+(?:,[0-9]+){3}$"#,
                    options: [.regularExpression, .caseInsensitive]) != nil
     }
+    static func dialogue(_ lines: [String]) -> String {
+        lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !isThumbnail($0) }.joined(separator: "\n")
+    }
     static func parse(_ source: String, extension ext: String) -> [SubtitleCue] {
         let lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
         var cues: [SubtitleCue] = []

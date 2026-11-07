@@ -220,6 +220,25 @@ import CoreMedia
         XCTAssertTrue(NativeCaptionLayout.available(region: region,margin: 0.1,controls: CGRect(x: 0,y: 8,width: 600,height: 292)).isEmpty)
     }
 
+    func testStandardCaptionsStayAtTheBottomWithVisibleControlsInEitherOrientation() {
+        XCTAssertEqual(NativeCaptionLayout.migrateMargin(0.10),0.05)
+        for viewport in [CGRect(x: 0,y: 0,width: 852,height: 393),CGRect(x: 0,y: 0,width: 402,height: 874)] {
+            let video = viewport.width > viewport.height
+                ? viewport.insetBy(dx: 76,dy: 0) : CGRect(x: 0,y: 268,width: 402,height: 226)
+            let margin = NativeCaptionLayout.defaultMargin
+            let font = NativeCaptionLayout.fontSize(preference: 22,videoHeight: video.height)
+            let lane = NativeCaptionLayout.laneHeight(region: video,fontSize: font,margin: margin)
+            let layout = NativeChromeLayout.fitted(video: video,viewport: viewport,safeInsets: .zero,captionLane: lane)
+            let size = CGSize(width: 180,height: 40)
+            let shown = NativeCaptionLayout.frame(region: video,textSize: size,margin: margin,controls: layout.dock,header: layout.header)
+            let hidden = NativeCaptionLayout.frame(region: video,textSize: size,margin: margin,controls: nil)
+            XCTAssertFalse(shown.isEmpty)
+            XCTAssertEqual(shown.maxY,hidden.maxY,accuracy: 0.1)
+            XCTAssertEqual(video.maxY - shown.maxY,NativeCaptionLayout.bottomInset(region: video,margin: margin),accuracy: 0.1)
+            XCTAssertFalse(shown.intersects(layout.dock))
+        }
+    }
+
     func testChromeUsesLetterboxSpaceInPortraitAndActualImageWidthInLandscape() {
         let portraitViewport = CGRect(x: 0,y: 0,width: 402,height: 874)
         let portraitVideo = CGRect(x: 0,y: 286,width: 402,height: 302)
@@ -329,9 +348,17 @@ import CoreMedia
         XCTAssertEqual(attributes[kCMTextMarkupAttribute_CharacterEdgeStyle as String] as? String,kCMTextMarkupCharacterEdgeStyle_Uniform as String)
         XCTAssertEqual(attributes[kCMTextMarkupAttribute_FontFamilyName as String] as? String,"Roboto")
         XCTAssertEqual(attributes[kCMTextMarkupAttribute_BoldStyle as String] as? Bool,true)
-        model.updateCaptionViewport(video: CGRect(x: 164,y: 0,width: 524,height: 393),controls: CGRect(x: 12,y: 271,width: 828,height: 100))
-        let raised = try XCTUnwrap(model.player.currentItem?.textStyleRules?.first?.textMarkupAttributes[kCMTextMarkupAttribute_OrthogonalLinePositionPercentageRelativeToWritingDirection as String] as? NSNumber)
-        XCTAssertLessThan(raised.doubleValue,90)
+        let item = try XCTUnwrap(model.player.currentItem)
+        model.installEmbeddedCaptionOutput(on: item)
+        let output = try XCTUnwrap(item.outputs.first as? AVPlayerItemLegibleOutput)
+        XCTAssertTrue(output.suppressesPlayerRendering)
+        output.delegate?.legibleOutput?(output,didOutputAttributedStrings: [
+            NSAttributedString(string: "Embedded dialogue"),
+            NSAttributedString(string: "https://example.test/preview.jpg#xywh=0,0,160,90")
+        ],nativeSampleBuffers: [],forItemTime: .zero)
+        XCTAssertEqual(model.captionText,"Embedded dialogue")
+        output.delegate?.outputSequenceWasFlushed?(output)
+        XCTAssertEqual(model.captionText,"")
         model.originalStyles = true
         let originalFont = try XCTUnwrap(model.player.currentItem?.textStyleRules?.first?.textMarkupAttributes)
         for key in [kCMTextMarkupAttribute_BackgroundColorARGB,kCMTextMarkupAttribute_CharacterBackgroundColorARGB] {
@@ -342,7 +369,7 @@ import CoreMedia
         XCTAssertEqual((originalFont[kCMTextMarkupAttribute_RelativeFontSize as String] as? NSNumber)?.doubleValue,100)
         model.captionSize = 30
         XCTAssertEqual((model.player.currentItem?.textStyleRules?.first?.textMarkupAttributes[kCMTextMarkupAttribute_RelativeFontSize as String] as? NSNumber)?.doubleValue,30.0 / 22 * 100)
-        XCTAssertNotNil(originalFont[kCMTextMarkupAttribute_OrthogonalLinePositionPercentageRelativeToWritingDirection as String],"Visible controls still need caption avoidance with an original-font preference")
+        XCTAssertFalse(output.suppressesPlayerRendering,"Only explicit source placement uses the native renderer")
         model.updateCaptionViewport(video: CGRect(x: 164,y: 0,width: 524,height: 393),controls: nil)
         XCTAssertNil(model.player.currentItem?.textStyleRules?.first?.textMarkupAttributes[kCMTextMarkupAttribute_OrthogonalLinePositionPercentageRelativeToWritingDirection as String])
     }
