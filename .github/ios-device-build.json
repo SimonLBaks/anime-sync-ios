@@ -2,5 +2,5 @@
   "version": "0.1.13",
   "build": 14,
   "reason": "Align embedded and separate subtitle placement with the lower picture edge.",
-  "simulator": "Verify caption placement, embedded output, and subtitle controls."
+  "simulator": "Rerun the caption placement and subtitle controls checks after updating the test harness."
 }

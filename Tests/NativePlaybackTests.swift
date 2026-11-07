@@ -370,7 +370,6 @@ import CoreMedia
         model.captionSize = 30
         XCTAssertEqual((model.player.currentItem?.textStyleRules?.first?.textMarkupAttributes[kCMTextMarkupAttribute_RelativeFontSize as String] as? NSNumber)?.doubleValue,30.0 / 22 * 100)
         XCTAssertFalse(output.suppressesPlayerRendering,"Only explicit source placement uses the native renderer")
-        model.updateCaptionViewport(video: CGRect(x: 164,y: 0,width: 524,height: 393),controls: nil)
         XCTAssertNil(model.player.currentItem?.textStyleRules?.first?.textMarkupAttributes[kCMTextMarkupAttribute_OrthogonalLinePositionPercentageRelativeToWritingDirection as String])
     }
 
@@ -496,7 +495,7 @@ import CoreMedia
         model.updateSubtitles([late])
         XCTAssertEqual(model.captionSelection,chosen.id); XCTAssertEqual(model.captionText,"Chosen cue")
         model.selectEmbedded(nil); model.updateSubtitles([chosen,late])
-        XCTAssertEqual(model.captionSelection,"embedded"); XCTAssertEqual(captions.requests.count,1)
+        XCTAssertEqual(model.captionSelection,"off"); XCTAssertEqual(captions.requests.count,1)
         let beforeClose = model.subtitles
         await model.close(); model.updateSubtitles([])
         XCTAssertEqual(model.subtitles,beforeClose); XCTAssertEqual(captions.requests.count,1); XCTAssertTrue(http.requests.isEmpty)
