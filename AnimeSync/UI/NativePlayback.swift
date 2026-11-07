@@ -93,7 +93,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     #endif
     @Published var captionText = ""
     @Published var captionSize: Double { didSet { if !fixture { UserDefaults.standard.set(captionSize,forKey: "caption.size") }; applyStyles() } }
-    @Published var captionMargin: Double { didSet { if !fixture { UserDefaults.standard.set(captionMargin,forKey: "caption.bottomMargin") } } }
+    @Published var captionMargin: Double { didSet { if !fixture { UserDefaults.standard.set(captionMargin,forKey: "caption.edgeMargin") } } }
     @Published var originalStyles: Bool { didSet { if !fixture { UserDefaults.standard.set(originalStyles,forKey: "caption.sourcePlacement") }; applyStyles(); refreshCaption() } }
     @Published var captionDelay: Double = 0 { didSet { refreshCaption() } }
     @Published var captionSelection = "automatic"
@@ -167,9 +167,8 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
         #endif
         self.explicitPosition = position; self.pendingGeneration = generation; self.clock = clock; self.seekOperation = seekOperation
         captionSize = fixture ? 22 : UserDefaults.standard.object(forKey: "caption.size") as? Double ?? 22
-        let savedMargin = UserDefaults.standard.object(forKey: "caption.bottomMargin") as? Double
-        let legacyMargin = UserDefaults.standard.object(forKey: "caption.margin") as? Double
-        captionMargin = fixture ? NativeCaptionLayout.defaultMargin : NativeCaptionLayout.margin(savedMargin ?? NativeCaptionLayout.migrateMargin(legacyMargin))
+        let savedMargin = UserDefaults.standard.object(forKey: "caption.edgeMargin") as? Double
+        captionMargin = fixture ? NativeCaptionLayout.defaultMargin : NativeCaptionLayout.margin(savedMargin ?? NativeCaptionLayout.defaultMargin)
         originalStyles = !fixture && UserDefaults.standard.bool(forKey: "caption.sourcePlacement")
         player.isMuted = fixture; player.allowsExternalPlayback = false
         observers.append(player.observe(\.rate, options: [.new]) { [weak self] _, change in Task { @MainActor in self?.rateChanged(change.newValue ?? 0) } })
@@ -532,11 +531,10 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
 /// All geometry is in the host view's coordinates. Captions follow the actual
 /// displayed image, never the letterbox/pillarbox or an assumed screen ratio.
 enum NativeCaptionLayout {
-    static let defaultMargin = 0.05
+    static let defaultMargin = 0.025
     static let step = 0.025
-    static func margin(_ value: Double) -> Double { value.isFinite ? min(0.20,max(0.025,value)) : defaultMargin }
-    static func migrateMargin(_ old: Double?) -> Double { margin((old ?? 0.10) * 0.5) }
-    static func bottomInset(region: CGRect,margin: Double) -> CGFloat { max(6,region.height * CGFloat(Self.margin(margin))) }
+    static func margin(_ value: Double) -> Double { value.isFinite ? min(0.20,max(0.0125,value)) : defaultMargin }
+    static func bottomInset(region: CGRect,margin: Double) -> CGFloat { max(4,region.height * CGFloat(Self.margin(margin))) }
     static func laneHeight(region: CGRect,fontSize: CGFloat,margin: Double) -> CGFloat {
         bottomInset(region: region,margin: margin) + ceil(fontSize * 2.7) + 8
     }
@@ -544,6 +542,14 @@ enum NativeCaptionLayout {
         guard video.minX.isFinite, video.minY.isFinite, video.width.isFinite, video.height.isFinite, video.width > 0, video.height > 0 else { return .zero }
         let result = video.intersection(viewport.inset(by: safeInsets))
         return result.isNull || result.isEmpty ? .zero : result
+    }
+    static func visiblePicture(video: CGRect,viewport: CGRect,safeViewport: CGRect) -> CGRect {
+        // The playback controls still use the full safe area. Dialogue uses
+        // the picture edge with its own inset, while respecting side cutouts.
+        let verticalBounds = CGRect(x: safeViewport.minX,y: safeViewport.minY,width: safeViewport.width,
+                                    height: max(0,viewport.maxY - safeViewport.minY))
+        let clipped = video.intersection(verticalBounds)
+        return clipped.isNull || clipped.isEmpty ? .zero : clipped
     }
     static func fontSize(preference: Double,videoHeight: CGFloat) -> CGFloat {
         let chosen = preference.isFinite ? preference : 22
@@ -671,7 +677,7 @@ struct NativeChromeLayout {
         let headerY = max(safe.minY,min(safe.maxY - headerHeight,top))
         var dockY = max(safe.minY,min(safe.maxY - dockHeight,bottom))
         if bottom < content.maxY, captionLane > 0 {
-            let lifted = content.maxY - captionLane - dockHeight
+            let lifted = min(viewport.maxY,video.maxY) - captionLane - dockHeight
             if lifted >= headerY + headerHeight + gap { dockY = min(dockY,lifted) }
         }
         return NativeChromeLayout(header: CGRect(x: left,y: headerY,width: width,height: headerHeight),
@@ -735,8 +741,7 @@ enum NativeSafeArea {
         let windowSafe = view.convert(window.bounds.inset(by: window.safeAreaInsets),from: window)
         let safe = NativeSafeArea.viewport(bounds: view.bounds,localInsets: view.safeAreaInsets,windowSafe: windowSafe)
         let video = playback.view.convert(playback.videoBounds,to: view)
-        let clipped = video.intersection(safe)
-        let region = clipped.isNull || clipped.isEmpty ? CGRect.zero : clipped
+        let region = NativeCaptionLayout.visiblePicture(video: video,viewport: view.bounds,safeViewport: safe)
         geometry?.report(region,safeViewport: safe)
         #if DEBUG
         qaVideoRegion.frame = region

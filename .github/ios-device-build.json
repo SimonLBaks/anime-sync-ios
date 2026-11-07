@@ -1,6 +1,6 @@
 {
-  "version": "0.1.13",
-  "build": 14,
-  "reason": "Align embedded and separate subtitle placement with the lower picture edge.",
-  "simulator": "Rerun the caption placement and subtitle controls checks after updating the test harness."
+  "version": "0.1.14",
+  "build": 15,
+  "reason": "Anchor standard dialogue closer to the actual video edge.",
+  "simulator": "Verify the lower edge placement and matching subtitle controls."
 }

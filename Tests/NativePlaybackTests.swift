@@ -221,7 +221,7 @@ import CoreMedia
     }
 
     func testStandardCaptionsStayAtTheBottomWithVisibleControlsInEitherOrientation() {
-        XCTAssertEqual(NativeCaptionLayout.migrateMargin(0.10),0.05)
+        XCTAssertEqual(NativeCaptionLayout.defaultMargin,0.025)
         for viewport in [CGRect(x: 0,y: 0,width: 852,height: 393),CGRect(x: 0,y: 0,width: 402,height: 874)] {
             let video = viewport.width > viewport.height
                 ? viewport.insetBy(dx: 76,dy: 0) : CGRect(x: 0,y: 268,width: 402,height: 226)
@@ -237,6 +237,18 @@ import CoreMedia
             XCTAssertEqual(video.maxY - shown.maxY,NativeCaptionLayout.bottomInset(region: video,margin: margin),accuracy: 0.1)
             XCTAssertFalse(shown.intersects(layout.dock))
         }
+    }
+
+    func testCaptionUsesTheVideoEdgeAndKeepsTheSideCutoutClear() {
+        let viewport = CGRect(x: 0,y: 0,width: 852,height: 393)
+        let safe = viewport.inset(by: UIEdgeInsets(top: 0,left: 59,bottom: 21,right: 59))
+        let video = viewport.insetBy(dx: 28,dy: 0)
+        let picture = NativeCaptionLayout.visiblePicture(video: video,viewport: viewport,safeViewport: safe)
+        XCTAssertEqual(picture.minX,safe.minX)
+        XCTAssertEqual(picture.maxX,safe.maxX)
+        XCTAssertEqual(picture.maxY,video.maxY)
+        let frame = NativeCaptionLayout.frame(region: picture,textSize: CGSize(width: 200,height: 35),margin: NativeCaptionLayout.defaultMargin,controls: nil)
+        XCTAssertEqual(video.maxY - frame.maxY,9.825,accuracy: 0.01)
     }
 
     func testChromeUsesLetterboxSpaceInPortraitAndActualImageWidthInLandscape() {
