@@ -55,6 +55,8 @@ struct TakeoverRequest: Identifiable {
     private var launchTicket: UUID?
     private var pendingTVLease: TVControlLease?
     private var pendingTVEpisode: TVState?
+    private var waitingForPlayerDismissal = false
+    private var pendingNextIdentity: (anime: String,episode: Double)?
     private var nativeSubtitleContext: (player: UUID, navigation: UInt64, account: UInt64, source: UInt64)?
     private var active = true
     private var handingOff = false
@@ -100,6 +102,14 @@ struct TakeoverRequest: Identifiable {
         provider.onBrowserPlayback = { [weak self] event in self?.receiveBrowser(event) }
         provider.$subtitles.sink { [weak self] sources in
             self?.forwardNativeSubtitles(sources)
+        }.store(in: &subscriptions)
+        provider.$sources.sink { [weak self] sources in
+            guard let self, let player = self.player, let context = self.nativeSubtitleContext,
+                  self.active, context.navigation == self.resolvingEpoch, context.account == self.sync.accountGeneration,
+                  self.provider.metadata == player.metadata,
+                  let source = sources.first(where: { $0.url == player.source.url && $0.configured &&
+                      $0.selectionRevision == context.source && $0.choiceID == player.source.choiceID }) else { return }
+            player.updateSegments(source.segments)
         }.store(in: &subscriptions)
         sync.onOwnershipLost = { [weak self] lease in
             guard let self, self.browserLease === lease else { return }; self.clearBrowser(); self.message = "Playback continued on another device. Press Play to resume here."
@@ -250,7 +260,11 @@ struct TakeoverRequest: Identifiable {
         provider.selectEpisode(id: id)
     }
     func launchIfReady() {
-        guard active, pendingPlay, player == nil, launchTask == nil, let metadata = provider.metadata else { return }
+        guard active, pendingPlay, player == nil, !waitingForPlayerDismissal, launchTask == nil, let metadata = provider.metadata else { return }
+        if let target = pendingNextIdentity, target.anime != metadata.animeID || target.episode != Double(metadata.episode) {
+            clearSelection(); message = "Miruro opened a different episode. Choose the episode again."
+            return
+        }
         let source = selectedSourceID.isEmpty ? provider.sources.first : provider.sources.first { $0.id == selectedSourceID }
         guard let source, source.selectionRevision == provider.selectionRevision,
               source.choiceID == provider.selectedChoiceID else { return }
@@ -276,9 +290,35 @@ struct TakeoverRequest: Identifiable {
         } else { makePlayer(metadata: metadata,source: source) }
     }
     private func makePlayer(metadata: AnimeMetadata,source: MediaSource) {
-        pendingPlay = false; message = nil; clearBrowser()
+        pendingPlay = false; pendingNextIdentity = nil; message = nil; clearBrowser()
         let identity = fixture ? AnimeMetadata(animeID: "",episode: "",title: metadata.title,watchURL: metadata.watchURL) : metadata
         let model = NativePlaybackModel(metadata: identity,source: source,subtitles: provider.subtitles,sync: sync,fixture: fixture,position: pendingResume?.position,generation: pendingResume?.generation ?? pendingSourceGeneration)
+        model.resolveNextEpisode = { [weak self,weak model] in
+            guard let self, let model, self.player === model, self.provider.metadata == metadata else { return nil }
+            return EpisodeChoice.next(in: self.provider.episodes,after: metadata)
+        }
+        model.onNextEpisode = { [weak self,weak model] episode,generation in
+            Task { @MainActor in
+                guard let self, let model, self.player === model, self.active,
+                      let url = episode.url, let number = Double(episode.number),
+                      episode == model.resolveNextEpisode?(), !self.busy else { return }
+                self.busy = true; defer { self.busy = false }
+                let account = self.sync.accountGeneration, epoch = self.resolvingEpoch
+                await model.close()
+                guard self.player === model else { return }
+                self.waitingForPlayerDismissal = true
+                self.player = nil; self.nativeSubtitleContext = nil
+                guard self.active, self.sync.accountGeneration == account, self.resolvingEpoch == epoch else { return }
+                self.open(url,replacing: true)
+                if generation != nil || !self.sync.isSignedIn {
+                    self.pendingNextIdentity = (metadata.animeID,number)
+                    self.pendingSourceGeneration = generation
+                    self.pendingPlay = true
+                    self.launchIfReady()
+                }
+                Task { await self.sync.refreshHistory() }
+            }
+        }
         model.onClose = { [weak self] in Task { await self?.closePlayer() } }
         model.onFallback = { [weak self] in Task { await self?.closePlayer(); self?.website() } }
         player = model
@@ -292,6 +332,12 @@ struct TakeoverRequest: Identifiable {
               context.account == sync.accountGeneration, context.source == provider.selectionRevision,
               provider.metadata == player.metadata else { return }
         player.updateSubtitles(sources.filter { $0.selectionRevision == context.source && $0.choiceID == player.source.choiceID })
+    }
+    func playerCoverDismissed() async {
+        if waitingForPlayerDismissal {
+            waitingForPlayerDismissal = false
+            launchIfReady()
+        } else { await closePlayer() }
     }
     func closePlayer() async { guard let current = player else { return }; await current.close(); if player === current { player = nil; nativeSubtitleContext = nil }; await sync.refreshHistory() }
     func website(panel: String? = nil) {
@@ -397,7 +443,7 @@ struct TakeoverRequest: Identifiable {
         left?.fragment = nil; right?.fragment = nil; return left?.string == right?.string
     }
     private func clearSelection() {
-        resolvingEpoch &+= 1; pendingPlay = false; pendingResume = nil; pendingSourceGeneration = nil; pendingTVLease = nil; pendingTVEpisode = nil; selectedSourceID = ""
+        resolvingEpoch &+= 1; pendingPlay = false; pendingNextIdentity = nil; pendingResume = nil; pendingSourceGeneration = nil; pendingTVLease = nil; pendingTVEpisode = nil; selectedSourceID = ""
         launchTicket = nil; launchTask?.cancel(); launchTask = nil
     }
     private func clearBrowser(pause: Bool = true,cancelStart: Bool = true) {

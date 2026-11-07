@@ -220,6 +220,7 @@
     if(next){metadata=next;send({type:'metadata',metadata});}
     catalogue();episodes();if(nativeMode&&metadata&&!sourceOptionsLoaded&&document.querySelector('button[aria-label="Provider"]')){sourceOptionsLoaded=true;collectSourceChoices();}
     if(metadata&&!window.AnimeSyncMediaSelection?.())for(const root of roots())for(const el of root.querySelectorAll('video,source,track')){
+      if(el.tagName==='TRACK'&&el.kind!=='subtitles'&&el.kind!=='captions')continue;
       const url=el.currentSrc||el.src;if(!url||!url.startsWith('https://'))continue;
       const k=el.tagName+url;if(observed.has(k))continue;observed.add(k);
       send({type:el.tagName==='TRACK'?'subtitle':'source',url,label:el.label||'',language:el.srclang||'en',confirmed:el.tagName==='VIDEO'});

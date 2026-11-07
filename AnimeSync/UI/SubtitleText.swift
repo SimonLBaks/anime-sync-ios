@@ -21,6 +21,10 @@ enum SubtitleText {
         for (a,b) in [("&amp;","&"),("&lt;","<"),("&gt;",">"),("&quot;","\""),("&#39;","'"),("&nbsp;"," ")] { text = text.replacingOccurrences(of: a, with: b) }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+    private static func isThumbnail(_ text: String) -> Bool {
+        text.range(of: #"^[^\s]+\.(?:avif|gif|jpe?g|png|webp)(?:\?[^\s#]*)?#xywh=(?:(?:pixel|percent):)?[0-9]+(?:,[0-9]+){3}$"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
+    }
     static func parse(_ source: String, extension ext: String) -> [SubtitleCue] {
         let lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
         var cues: [SubtitleCue] = []
@@ -34,7 +38,7 @@ enum SubtitleText {
                 guard line.lowercased().hasPrefix("dialogue:"), let startIndex = fields.firstIndex(of: "start"), let endIndex = fields.firstIndex(of: "end"), let textIndex = fields.firstIndex(of: "text") else { continue }
                 let values = line.dropFirst(9).split(separator: ",", maxSplits: max(0, fields.count - 1), omittingEmptySubsequences: false).map(String.init)
                 guard values.count == fields.count, let start = time(values[startIndex]), let end = time(values[endIndex]), end > start else { continue }
-                let text = plain(values[textIndex]); if !text.isEmpty { cues.append(SubtitleCue(start: start,end: end,text: text)) }
+                let text = plain(values[textIndex]); if !text.isEmpty && !isThumbnail(text) { cues.append(SubtitleCue(start: start,end: end,text: text)) }
                 if cues.count >= 30_000 { break }
             }
         } else {
@@ -46,7 +50,7 @@ enum SubtitleText {
                 guard timing.count == 2, let start = time(timing[0]), let token = timing[1].split(whereSeparator: { $0.isWhitespace }).first, let end = time(String(token)), end > start else { continue }
                 var text: [String] = []
                 while index < lines.count && !lines[index].trimmingCharacters(in: .whitespaces).isEmpty { text.append(lines[index]); index += 1 }
-                let plainText = plain(text.joined(separator: "\n")); if !plainText.isEmpty { cues.append(SubtitleCue(start: start,end: end,text: plainText)) }
+                let plainText = plain(text.joined(separator: "\n")); if !plainText.isEmpty && !isThumbnail(plainText) { cues.append(SubtitleCue(start: start,end: end,text: plainText)) }
             }
         }
         return cues.sorted { $0.start == $1.start ? $0.end < $1.end : $0.start < $1.start }

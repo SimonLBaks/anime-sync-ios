@@ -1,6 +1,6 @@
 {
-  "version": "0.1.11",
-  "build": 12,
-  "reason": "Show the current episode's saved viewing progress in the episode list.",
-  "simulator": "Verify the current episode exposes its own saved percentage and retains the watched marker and source controls."
+  "version": "0.1.12",
+  "build": 13,
+  "reason": "Use Miruro's opening and ending markers, offer the next episode and filter seek thumbnail cues.",
+  "simulator": "Verify source timing, episode continuation and subtitle regressions."
 }

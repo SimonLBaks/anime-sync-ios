@@ -20,7 +20,7 @@
       const referer=new URL(details.frameURL||location.href);
       window.webkit?.messageHandlers?.providerResource?.postMessage({nonce, data:JSON.stringify({
         type:subtitle ? 'subtitle' : 'source', url:u.href, mime, mediaElement,
-        configured:details.configured===true,
+        configured:details.configured===true,segments:details.segments,
         label:String(details.label||'').slice(0,120),language:String(details.language||'').slice(0,20),
         page:location.href, requestPage,selection:ticket,
         headers:{Referer:referer.href,Origin:referer.origin,'User-Agent':navigator.userAgent}
@@ -60,7 +60,12 @@
         revisions.set(this,revision);selections.set(this,selection);
         report({type:'source-session',sessionID:String(session.id||'').slice(0,200),revision,status:String(session.status||'').slice(0,40)});
         const frameURL=this.shadowRoot?.querySelector('iframe')?.src||location.href;
-        if(session.source?.kind==='direct')send(session.source.url,'source',session.source.type||'',location.href,true,{frameURL,configured:true});
+        if(session.source?.kind==='direct'){
+          const segments=(Array.isArray(session.segments)?session.segments:[]).slice(0,16)
+            .filter(s=>s&&(s.kind==='intro'||s.kind==='outro')&&Number.isFinite(s.start)&&Number.isFinite(s.end))
+            .map(({kind,start,end})=>({kind,start,end}));
+          send(session.source.url,'source',session.source.type||'',location.href,true,{frameURL,configured:true,segments});
+        }
         for(const track of (Array.isArray(session.tracks)?session.tracks:[]).slice(0,32)){
           if(track&&(track.kind==='subtitles'||track.kind==='captions'))send(track.src,'subtitle','',location.href,false,{label:track.label,language:track.language,frameURL,configured:true});
         }
@@ -81,6 +86,7 @@
   const scan = () => {
     if(selection)return; // Selected sources use request-captured or configured offers.
     for(const root of roots())for(const node of root.querySelectorAll('video,audio,source,track')){
+      if(node.tagName==='TRACK'&&node.kind!=='subtitles'&&node.kind!=='captions')continue;
       quiet(node);
       const url=node.currentSrc||node.src;if(!url)continue;
       const key=node.tagName+' '+url+' '+(node.label||'')+' '+(node.srclang||'');if(seen.has(key))continue;seen.add(key);

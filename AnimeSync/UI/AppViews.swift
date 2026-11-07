@@ -31,7 +31,7 @@ struct AppRoot: View {
         }
         .sheet(isPresented: Binding(get: { model.tvPanel && model.player == nil },set: { model.tvPanel = $0 })) { TVPanel(model: model) }
         .sheet(isPresented: Binding(get: { model.pairingSheet && !model.tvPanel },set: { model.pairingSheet = $0 }),onDismiss: { model.tv.cancelPairing(); model.discovery.stop() }) { PairingScreen(model: model) }
-        .fullScreenCover(item: $model.player,onDismiss: { Task { await model.closePlayer() } },content: playerView)
+        .fullScreenCover(item: $model.player,onDismiss: { Task { await model.playerCoverDismissed() } },content: playerView)
         .modifier(TakeoverAlert(model: model,enabled: !model.tvPanel && model.player == nil))
         .overlay(alignment: .bottom) {
             AppNotice(model: model)

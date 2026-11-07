@@ -80,6 +80,12 @@ enum NativeCaptionPolicy {
     @Published var isStarting = false
     @Published private(set) var isSeeking = false
     @Published private(set) var handoffInProgress = false
+    @Published private(set) var activeSegment: PlaybackSegment?
+    @Published var nextEpisodePrompt: EpisodeChoice?
+    private var segments: [PlaybackSegment]
+    private(set) var finishedGeneration: Int64?
+    var resolveNextEpisode: (() -> EpisodeChoice?)?
+    var onNextEpisode: ((EpisodeChoice,Int64?) -> Void)?
     private(set) var lease: PlaybackLease?
     private var mediaBridge: MediaBridge?
     private var ticks: Any?
@@ -97,6 +103,7 @@ enum NativeCaptionPolicy {
         init(_ source: SubtitleSource) { url = source.url; headers = MediaBridgePolicy.headers(source.headers) }
     }
     private var activeSubtitleRequest: SubtitleRequestIdentity?
+    private var emptySubtitleRequests: [SubtitleRequestIdentity] = []
     private var startTask: Task<Void,Never>?
     private var pendingGeneration: Int64?
     private var explicitPosition: TimeInterval?
@@ -123,6 +130,7 @@ enum NativeCaptionPolicy {
 
     init(metadata: AnimeMetadata, source: MediaSource, subtitles: [SubtitleSource], sync: SyncService, fixture: Bool = false, position: TimeInterval? = nil, generation: Int64? = nil, clock: (() -> (position: TimeInterval, duration: TimeInterval))? = nil, captionTransport: HTTPTransport? = nil, seekOperation: ((AVPlayer, TimeInterval) async -> Void)? = nil) {
         self.metadata = metadata; self.source = source; self.sync = sync; self.fixture = fixture
+        segments = source.segments
         #if DEBUG
         if fixture {
             self.subtitles = [SubtitleSource(url: QACaptionTransport.url,label: "Fixture captions",language: "en")]
@@ -142,7 +150,7 @@ enum NativeCaptionPolicy {
         ticks = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25,preferredTimescale: 600),queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, !self.disposed else { return }
-                self.refreshCaption()
+                self.refreshCaption(); self.refreshSegment()
                 #if DEBUG
                 if self.fixture {
                     let realPosition = self.player.currentTime().seconds
@@ -159,10 +167,13 @@ enum NativeCaptionPolicy {
         notifications.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,object: nil,queue: .main) { [weak self] note in Task { @MainActor in
             guard let self, !self.disposed, !self.closing, note.object as AnyObject? === self.player.currentItem else { return }
             let epoch = self.startingEpoch, item = self.player.currentItem, captured = self.lease
+            let canContinue = captured?.isValid == true || self.localOnly
             await self.save(ended: true)
             guard !self.disposed, !self.closing, self.startingEpoch == epoch,
                   self.player.currentItem === item, self.lease === captured, self.player.rate == 0 else { return }
-            self.release(); self.message = "Episode finished"
+            self.finishedGeneration = captured?.isValid == true ? captured?.generation : nil
+            self.release(); self.refreshSegment(); self.message = "Episode finished"
+            if canContinue, captured?.isValid != false { self.nextEpisodePrompt = self.resolveNextEpisode?() }
         } })
         notifications.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification,object: nil,queue: .main) { [weak self] _ in Task { @MainActor in await self?.background() } })
         notifications.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemTimeJumped,object: nil,queue: .main) { [weak self] note in
@@ -230,6 +241,7 @@ enum NativeCaptionPolicy {
     }
     func play(explicit: Bool, expectedGeneration: Int64? = nil) async {
         guard !disposed, !closing, !isStarting, !isSeeking, !handoffInProgress else { return }
+        nextEpisodePrompt = nil; finishedGeneration = nil
         isStarting = true; startingEpoch &+= 1; let epoch = startingEpoch
         clearScrubWindow()
         defer { if epoch == startingEpoch { isStarting = false; restoring = false } }
@@ -295,6 +307,21 @@ enum NativeCaptionPolicy {
         guard !disposed, !closing, epoch == startingEpoch, revision == controlSeekRevision,
               player.currentItem === item, !Task.isCancelled else { return }
         refreshCaption()
+    }
+    func updateSegments(_ segments: [PlaybackSegment]) {
+        guard self.segments != segments else { return }
+        self.segments = segments; refreshSegment()
+    }
+    private func refreshSegment() {
+        let next = canSeek && (localOnly || lease?.isValid == true)
+            ? segments.first { $0.contains(position,duration: duration) } : nil
+        if activeSegment != next { activeSegment = next }
+    }
+    func skip(_ segment: PlaybackSegment) async {
+        guard (localOnly || lease?.isValid == true), segments.contains(segment),
+              segment.contains(position,duration: duration) else { return }
+        await seek(to: segment.end)
+        refreshSegment()
     }
     private func cancelControlSeek() {
         controlSeekRevision &+= 1; isSeeking = false
@@ -376,7 +403,7 @@ enum NativeCaptionPolicy {
     func updateSubtitles(_ sources: [SubtitleSource]) {
         guard !disposed, !closing, !fixture else { return }
         var seen = Set<String>()
-        let next = Array(sources.filter { MediaBridgePolicy.allows($0.url) && seen.insert($0.id).inserted }.prefix(32))
+        let next = Array(sources.filter { MediaBridgePolicy.allows($0.url) && !emptySubtitleRequests.contains(SubtitleRequestIdentity($0)) && seen.insert($0.id).inserted }.prefix(32))
         if subtitles != next { subtitles = next }
         if embeddedTracksResolved || player.currentItem == nil { selectAutomaticExternal() }
     }
@@ -397,11 +424,10 @@ enum NativeCaptionPolicy {
         activeSubtitleRequest = source.map(SubtitleRequestIdentity.init)
         subtitleEpoch &+= 1; let epoch = subtitleEpoch
         cueTask?.cancel(); cues = []; captionText = ""; captionSelection = source?.id ?? "off"
-        if let item = player.currentItem { Task { [weak self] in
-            if let group = try? await item.asset.loadMediaSelectionGroup(for: .legible),
-               let self, !self.disposed, epoch == self.subtitleEpoch, self.player.currentItem === item { item.select(nil,in: group) }
-        } }
-        guard let source else { return }
+        guard let source else {
+            Task { [weak self] in await self?.deselectEmbedded(for: epoch) }
+            return
+        }
         cueTask = Task { [weak self] in
             do {
                 var request = URLRequest(url: source.url); request.timeoutInterval = 10
@@ -411,10 +437,25 @@ enum NativeCaptionPolicy {
                 guard (200..<300).contains(reply.status), let text = String(data: reply.body,encoding: .utf8) else { throw CoreError.message("Subtitles could not load") }
                 let parsed = SubtitleText.parse(text,extension: source.url.pathExtension)
                 guard !self.disposed, !Task.isCancelled, epoch == self.subtitleEpoch, self.captionSelection == source.id else { return }
+                if parsed.isEmpty {
+                    let rejected = SubtitleRequestIdentity(source)
+                    self.emptySubtitleRequests.append(rejected)
+                    self.subtitles.removeAll { SubtitleRequestIdentity($0) == rejected }
+                    self.captionSelection = "automatic"
+                    self.activeSubtitleRequest = nil
+                    if automatic { self.selectAutomaticExternal() }
+                    else { self.message = "No readable subtitles in this track. Try another track or the website player." }
+                    return
+                }
+                await self.deselectEmbedded(for: epoch)
+                guard !self.disposed, !self.closing, !Task.isCancelled, epoch == self.subtitleEpoch else { return }
                 self.cues = parsed; self.refreshCaption()
-                if parsed.isEmpty { self.message = "No readable subtitles in this track. Try another track or the website player." }
             } catch { if !Task.isCancelled { self?.message = "Subtitles could not load. Try another track." } }
         }
+    }
+    private func deselectEmbedded(for epoch: UInt64) async {
+        if let item = player.currentItem, let group = try? await item.asset.loadMediaSelectionGroup(for: .legible),
+           !disposed, !closing, epoch == subtitleEpoch, player.currentItem === item { item.select(nil,in: group) }
     }
     func selectEmbedded(_ option: AVMediaSelectionOption?) {
         guard !disposed, !closing else { return }
@@ -866,6 +907,15 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
             .statusBarHidden(true)
             .animation(.easeInOut(duration: 0.2),value: toolbar.visible)
             .task { await model.prepare() }
+            .alert("Episode finished",isPresented: Binding(
+                get: { model.nextEpisodePrompt != nil },set: { if !$0 { model.nextEpisodePrompt = nil } }),
+                presenting: model.nextEpisodePrompt
+            ) { episode in
+                Button("Play next episode") { model.onNextEpisode?(episode,model.finishedGeneration) }
+                Button("Back to episodes",role: .cancel) { model.onClose?() }
+            } message: { episode in
+                Text("Episode \(episode.number)")
+            }
             .sheet(isPresented: $captions) { SubtitleSettings(model: model) }
             .confirmationDialog("Playback options",isPresented: $options,titleVisibility: .visible) {
                 Button(model.player.isMuted ? "Unmute" : "Mute") { model.player.isMuted.toggle(); toolbar.reveal() }
@@ -901,6 +951,14 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                                    headerFrame: toolbar.visible ? layout.header : nil,geometry: videoGeometry)
             if toolbar.visible, !videoGeometry.safeViewport.isEmpty {
                 chrome(layout: layout,compact: geometry.size.width > geometry.size.height).transition(.opacity)
+            }
+            if let segment = model.activeSegment, !layout.header.isEmpty {
+                Button(segment.kind.title) { Task { await model.skip(segment) } }
+                    .font(.subheadline.weight(.semibold)).padding(.horizontal,14).frame(minHeight: 44)
+                    .background(.black.opacity(0.75),in: Capsule()).foregroundStyle(.white)
+                    .frame(width: layout.header.width,alignment: .trailing)
+                    .position(x: layout.header.midX,y: layout.header.maxY + 27)
+                    .accessibilityIdentifier("player.skip." + segment.kind.rawValue)
             }
             if model.message != "Playing" {
                 VStack { Spacer(); Text(model.message).font(.footnote).multilineTextAlignment(.center)

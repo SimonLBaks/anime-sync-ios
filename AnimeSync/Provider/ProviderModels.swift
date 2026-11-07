@@ -49,6 +49,52 @@ struct EpisodeChoice: Identifiable, Equatable {
         self.id = id; self.label = label; self.number = number; self.title = title; self.selected = selected; self.url = url
     }
 }
+extension EpisodeChoice {
+    static func next(in choices: [EpisodeChoice], after metadata: AnimeMetadata) -> EpisodeChoice? {
+        guard let current = Double(metadata.episode), metadata.watchURL.path.hasPrefix("/watch/") else { return nil }
+        let ordered = choices.compactMap { choice -> (EpisodeChoice, Double)? in
+            guard AppWebPolicy.identity(animeID: metadata.animeID,episode: choice.number),
+                  let number = Double(choice.number), number > current else { return nil }
+            return (choice,number)
+        }.sorted { $0.1 < $1.1 }
+        guard let (choice,number) = ordered.first else { return nil }
+        let firstNumber = ordered.prefix { $0.1 == number }
+        for (candidate,_) in firstNumber {
+            guard let url = candidate.url, AppWebPolicy.isProvider(url),
+                  AppWebPolicy.origin(url) == AppWebPolicy.origin(metadata.watchURL), url.path == metadata.watchURL.path,
+                  var parts = URLComponents(url: url,resolvingAgainstBaseURL: false),
+                  let query = parts.queryItems?.filter({ $0.name == "ep" }), query.count == 1,
+                  query[0].value.flatMap(Double.init) == number else { continue }
+            parts.queryItems = [URLQueryItem(name: "ep",value: choice.number)]
+            parts.fragment = nil
+            var target = candidate; target.url = parts.url
+            return target
+        }
+        return nil
+    }
+}
+
+struct PlaybackSegment: Equatable {
+    enum Kind: String {
+        case intro, outro
+        var title: String { self == .intro ? "Skip opening" : "Skip ending" }
+    }
+    let kind: Kind
+    let start: TimeInterval
+    let end: TimeInterval
+    static func parse(_ entries: [JSONValue]) -> [PlaybackSegment] {
+        entries.prefix(16).compactMap { entry in
+            guard let item = entry.object, let kind = item["kind"]?.string.flatMap(Kind.init(rawValue:)),
+                  let start = item["start"]?.double, let end = item["end"]?.double,
+                  start.isFinite, end.isFinite, start >= 0, end > start else { return nil }
+            return PlaybackSegment(kind: kind,start: start,end: end)
+        }
+    }
+    func contains(_ position: TimeInterval, duration: TimeInterval) -> Bool {
+        duration.isFinite && start < duration && end <= duration + 1 && position >= start && position < end && position < duration
+    }
+}
+
 struct WebsiteSourceChoice: Identifiable, Equatable {
     var id: String
     var kind: String
@@ -71,8 +117,9 @@ struct MediaSource: Identifiable, Equatable {
     var choiceID: String
     var selectionRevision: UInt64
     var configured: Bool
-    init(url: URL, headers: [String: String] = [:], confirmed: Bool = false, mimeType: String = "",choiceID: String = "",selectionRevision: UInt64 = 0,configured: Bool = false) {
-        self.url = url; self.headers = headers; self.confirmed = confirmed; self.mimeType = mimeType; self.choiceID = choiceID; self.selectionRevision = selectionRevision; self.configured = configured
+    var segments: [PlaybackSegment]
+    init(url: URL, headers: [String: String] = [:], confirmed: Bool = false, mimeType: String = "",choiceID: String = "",selectionRevision: UInt64 = 0,configured: Bool = false,segments: [PlaybackSegment] = []) {
+        self.url = url; self.headers = headers; self.confirmed = confirmed; self.mimeType = mimeType; self.choiceID = choiceID; self.selectionRevision = selectionRevision; self.configured = configured; self.segments = segments
     }
     var nativePlayable: Bool {
         ["m3u8", "mp4", "m4v"].contains(url.pathExtension.lowercased()) ||

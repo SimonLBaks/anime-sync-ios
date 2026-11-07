@@ -410,13 +410,14 @@ import WebKit
             return
         }
         let mime = String((packet["mime"]?.string ?? "").prefix(120))
+        let segmentEntries = configured ? packet["segments"]?.array ?? [] : []
         if !websiteMode, !ProviderPolicy.nativeMedia(url,mimeType: mime), !AppWebPolicy.isMedia(url),
            confirmed || packet["mediaElement"]?.bool == true {
-            probeSource(url,headers: headers,frameURL: frameURL,confirmed: !resourceOnly && confirmed,configured: configured)
+            probeSource(url,headers: headers,frameURL: frameURL,confirmed: !resourceOnly && confirmed,configured: configured,segments: segmentEntries)
             return
         }
         guard confirmed || AppWebPolicy.isMedia(url) || ProviderPolicy.nativeMedia(url, mimeType: mime) else { return }
-        let next = MediaSource(url: url,headers: headers,confirmed: !resourceOnly && confirmed,mimeType: mime,choiceID: selectedChoiceID,selectionRevision: selectionRevision,configured: configured)
+        let next = MediaSource(url: url,headers: headers,confirmed: !resourceOnly && confirmed,mimeType: mime,choiceID: selectedChoiceID,selectionRevision: selectionRevision,configured: configured,segments: PlaybackSegment.parse(segmentEntries))
         if next.nativePlayable {
             guard sources.count < 24 || sources.contains(where: { $0.url == url }) else { return }
             if let i = sources.firstIndex(where: { $0.url == url }) {
@@ -425,7 +426,8 @@ import WebKit
                 // cannot replace a confirmed source or grant playback authority.
                 if next.confirmed || !sources[i].confirmed && (next.configured || !sources[i].configured && sources[i].headers == next.headers) {
                     var merged = next; merged.confirmed = next.confirmed || sources[i].confirmed
-                    merged.configured = next.configured || sources[i].configured; sources[i] = merged
+                    merged.configured = next.configured || sources[i].configured
+                    if !next.configured { merged.segments = sources[i].segments }; sources[i] = merged
                 }
             }
             else { sources.append(next) }
@@ -449,7 +451,7 @@ import WebKit
         sessionChanging = packet["status"]?.string != "ready"
         sourceStatus = !sources.isEmpty ? .ready : sourceProbes.isEmpty ? .waitingForStream : .checkingFormat
     }
-    private func probeSource(_ url: URL,headers: [String:String],frameURL: URL,confirmed: Bool,configured: Bool = false) {
+    private func probeSource(_ url: URL,headers: [String:String],frameURL: URL,confirmed: Bool,configured: Bool = false,segments: [JSONValue] = []) {
         let key = url.absoluteString
         guard !fixture, MediaBridgePolicy.allows(url), probedSources.count < 12, sourceProbes.count < 3,
               !probedSources.contains(key) else { return }
@@ -462,7 +464,7 @@ import WebKit
             if let mime {
                 self.candidate(["type": .string("source"), "url": .string(key), "mime": .string(mime),
                                 "selection": .string(selection),
-                                "configured": .bool(configured),
+                                "configured": .bool(configured), "segments": .array(segments),
                                 "headers": .object(headers.mapValues(JSONValue.string))],frameURL: frameURL,confirmed: confirmed,resourceOnly: !confirmed,trustedConfiguration: configured)
             } else if self.sourceProbes.isEmpty, self.sources.isEmpty, self.sourceStatus == .checkingFormat { self.sourceStatus = .waitingForStream }
         }

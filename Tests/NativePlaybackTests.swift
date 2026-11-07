@@ -774,10 +774,56 @@ final class SubtitleTextTests: XCTestCase {
         let cues = SubtitleText.parse(text,extension: "ass")
         XCTAssertEqual(cues,[SubtitleCue(start: 1,end: 3,text: "Hello, world\nSecond line")])
     }
+    func testStoryboardCueDoesNotCoverSimultaneousDialogue() {
+        let vtt = """
+        WEBVTT
+
+        00:01.000 --> 00:04.000
+        https://example.test/preview.jpg?token=abc#xywh=0,0,160,90
+
+        00:01.500 --> 00:03.000
+        Keep this dialogue.
+
+        00:03.000 --> 00:04.000
+        Look at https://example.test/photo.jpg#xywh=0,0,160,90
+        """
+        let cues = SubtitleText.parse(vtt,extension: "vtt")
+        XCTAssertEqual(SubtitleText.active(cues,at: 1),"")
+        XCTAssertEqual(SubtitleText.active(cues,at: 2),"Keep this dialogue.")
+        XCTAssertTrue(SubtitleText.active(cues,at: 3.5).hasPrefix("Look at"))
+    }
     func testInvalidAndEmptyCaptionInputDoesNotManufactureCues() {
         for text in ["", "not subtitles", "00:03 --> 00:01\nbackwards\n", "00:99 --> 00:100\ninvalid\n"] {
             XCTAssertTrue(SubtitleText.parse(text,extension: "srt").isEmpty)
         }
         XCTAssertEqual(SubtitleText.active([],at: .nan),"")
+    }
+}
+
+
+final class EpisodeContinuationTests: XCTestCase {
+    func testNextUsesVerifiedInventoryAndClearsOldResume() throws {
+        let watch = try XCTUnwrap(URL(string: "https://miruro.cx/watch/example/title?ep=1"))
+        let metadata = AnimeMetadata(animeID: "42",episode: "1",title: "Example",watchURL: watch)
+        let later = EpisodeChoice(id: "3",label: "3",number: "3",url: URL(string: "https://miruro.cx/watch/example/title?ep=3"))
+        let next = EpisodeChoice(id: "1.5",label: "1.5",number: "1.5",url: URL(string: "https://miruro.cx/watch/example/title?ep=1.5&lang=en#anime-sync-t=120"))
+        XCTAssertEqual(EpisodeChoice.next(in: [later,next],after: metadata)?.url?.absoluteString,"https://miruro.cx/watch/example/title?ep=1.5")
+        var wrong = next; wrong.url = URL(string: "https://miruro.cx/watch/other/title?ep=1.5")
+        XCTAssertNil(EpisodeChoice.next(in: [wrong,later],after: metadata))
+        var finale = metadata; finale.episode = "3"
+        XCTAssertNil(EpisodeChoice.next(in: [later,next],after: finale))
+    }
+    func testSegmentsRequireExactBoundsAndMatchingDuration() throws {
+        let segments = PlaybackSegment.parse([
+            .object(["kind": .string("intro"),"start": .integer(31),"end": .integer(111)]),
+            .object(["kind": .string("outro"),"start": .number(.infinity),"end": .integer(130)]),
+            .object(["kind": .string("outro"),"start": .string("110"),"end": .integer(120)])
+        ])
+        XCTAssertEqual(segments.count,1)
+        let opening = try XCTUnwrap(segments.first)
+        XCTAssertFalse(opening.contains(30.999,duration: 1447))
+        XCTAssertTrue(opening.contains(31,duration: 1447))
+        XCTAssertFalse(opening.contains(111,duration: 1447))
+        XCTAssertFalse(opening.contains(31,duration: 80))
     }
 }
