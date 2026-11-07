@@ -197,7 +197,8 @@ final class QAAcceptanceTests: XCTestCase {
         if appFrame.height > appFrame.width {
             XCTAssertLessThanOrEqual(back.maxY,image.minY,"Portrait actions should use the nearby upper letterbox")
             XCTAssertLessThanOrEqual(image.minY - back.maxY,16)
-            XCTAssertGreaterThanOrEqual(dock.minY,image.maxY,"Portrait playback controls should sit directly below the image")
+            // UIKit video and SwiftUI controls report independently rounded accessibility frames.
+            XCTAssertGreaterThanOrEqual(dock.minY,image.maxY - 1,"Portrait playback controls should sit directly below the image")
             XCTAssertLessThanOrEqual(dock.minY - image.maxY,16)
         } else {
             XCTAssertGreaterThanOrEqual(dock.minX,image.minX - 1)

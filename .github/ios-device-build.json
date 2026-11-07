@@ -2,5 +2,5 @@
   "version": "0.1.10",
   "build": 11,
   "reason": "Use the shared cast icon on the episode action and preserve individual playback header accessibility identifiers.",
-  "simulator": "Verify the native player’s actual subtitle controls, portrait and landscape fit, and tap-to-hide with the restored header identifiers."
+  "simulator": "Rerun focused player and UI acceptance with one-point accessibility frame tolerance at the portrait video edge."
 }
