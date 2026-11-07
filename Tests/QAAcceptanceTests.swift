@@ -127,6 +127,12 @@ final class QAAcceptanceTests: XCTestCase {
         app.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,count: min(2000,current.count)) + text)
     }
 
+    @MainActor private func waitForText(_ app: XCUIApplication, _ id: String, _ text: String) {
+        let field = element(app,id)
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@",text),object: field)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled],timeout: 12),.completed,"The keyboard must enter the complete value in \(id)")
+    }
+
     @MainActor private func openTV(_ app: XCUIApplication) {
         if !element(app, "tv.content").exists { element(app, "tv.pill").tap() }
         XCTAssertTrue(element(app, "tv.close").waitForExistence(timeout: 4))
@@ -164,13 +170,16 @@ final class QAAcceptanceTests: XCTestCase {
         from.press(forDuration: 0.1,thenDragTo: to,withVelocity: .slow,thenHoldForDuration: 0.5)
     }
 
-    @MainActor private func revealPlayerControls(_ app: XCUIApplication) {
-        // Use the actual image, since portrait chrome now sits close to its
-        // letterbox edges. A fixed screen point could hit the actions instead.
-        let image = element(app,"qa.player.video-region").frame, viewport = app.frame
+    @MainActor private func playerCoordinate(_ app: XCUIApplication, at point: CGPoint, viewport: CGRect) -> XCUICoordinate {
+        XCTAssertTrue(viewport.contains(point),"Player touch must be within the app viewport")
+        return app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: point.x - viewport.minX,dy: point.y - viewport.minY))
+    }
+
+    @MainActor private func videoTapPoint(_ app: XCUIApplication, viewport: CGRect) -> XCUICoordinate {
+        let image = element(app,"qa.player.video-region").frame
         XCTAssertGreaterThan(image.height,100)
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: image.midX - viewport.minX,dy: image.minY + image.height * 0.3 - viewport.minY)).tap()
-        XCTAssertTrue(element(app,"player.subtitles").waitForExistence(timeout: 4))
+        return playerCoordinate(app,at: CGPoint(x: image.midX,y: image.minY + image.height * 0.3),viewport: viewport)
     }
 
     @MainActor private func assertNativeCaptionAndTransportFit(_ app: XCUIApplication,caption: XCUIElement) {
@@ -193,6 +202,8 @@ final class QAAcceptanceTests: XCTestCase {
         } else {
             XCTAssertGreaterThanOrEqual(dock.minX,image.minX - 1)
             XCTAssertLessThanOrEqual(dock.maxX,image.maxX + 1,"Landscape playback controls should use image width rather than the black pillars")
+            XCTAssertLessThanOrEqual(dock.width,341,"The landscape dock must stay compact on wide video")
+            XCTAssertLessThanOrEqual(dock.height,90,"The landscape dock should leave more of the picture unobstructed")
             XCTAssertGreaterThanOrEqual(back.minX,image.minX - 1)
             XCTAssertLessThanOrEqual(subtitles.maxX,image.maxX + 1)
         }
@@ -206,6 +217,10 @@ final class QAAcceptanceTests: XCTestCase {
             XCTAssertTrue(control.isHittable)
         }
         let play = controlFrames["player.play-pause"]!, previous = controlFrames["player.skip.back"]!, next = controlFrames["player.skip.forward"]!
+        for frame in [play, previous, next] {
+            XCTAssertGreaterThanOrEqual(frame.width,43)
+            XCTAssertGreaterThanOrEqual(frame.height,43,"The visual reduction must preserve full-size transport touch targets")
+        }
         XCTAssertEqual(play.midX,dock.midX,accuracy: 1,"Play/Pause must stay centered independently of timer text or loading indicators")
         XCTAssertEqual(play.midX - previous.midX,next.midX - play.midX,accuracy: 1)
         XCTAssertEqual(previous.midY,play.midY,accuracy: 1); XCTAssertEqual(next.midY,play.midY,accuracy: 1)
@@ -429,9 +444,10 @@ final class QAAcceptanceTests: XCTestCase {
         let app = launch("--qa-tv-unpaired")
         openConnect(app)
         setText(app, "tv.pair.address", "8.8.8.8",replacing: "10.0.0.20",alreadyPresent: true)
-        XCTAssertEqual(element(app,"tv.pair.address").value as? String,"8.8.8.8")
+        // The recording showed the last key appear after the immediate AX read.
+        waitForText(app,"tv.pair.address","8.8.8.8")
         setText(app, "tv.pair.pin", "000000",replacing: "",alreadyPresent: true) // Disposable fixture value, never a live pairing PIN.
-        XCTAssertEqual(element(app,"tv.pair.pin").value as? String,"000000")
+        waitForText(app,"tv.pair.pin","000000")
         let submit = element(app, "tv.pair.submit")
         XCTAssertFalse(submit.isEnabled,"A complete code cannot enable pairing to a public address")
         XCTAssertTrue(element(app, "tv.pair.address").exists, "Invalid public address must not commit pairing")
@@ -491,6 +507,7 @@ final class QAAcceptanceTests: XCTestCase {
     }
 
     @MainActor func testStandaloneMutedNativeFrameSubtitlesAndClose() {
+        executionTimeAllowance = 300
         let app = launch("--qa-tv-unpaired")
         let row = element(app, "row.continue")
         XCTAssertTrue(row.waitForExistence(timeout: 5))
@@ -522,11 +539,25 @@ final class QAAcceptanceTests: XCTestCase {
         // performing that single lookup outside a competing expectation timer.
         XCTAssertEqual(app.buttons.matching(identifier: "player.subtitles").count,0,"Controls must actually leave accessibility after the playback idle window")
         screenshot(app, "fixture-native-decoded-frame")
-        revealPlayerControls(app)
+
+        let viewport = app.frame
+        let videoPoint = videoTapPoint(app,viewport: viewport)
+        let cachedPause = app.staticTexts.matching(identifier: "qa.player.pause-point").firstMatch
+        let coordinates = (cachedPause.value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+        guard coordinates.count == 2, coordinates.allSatisfy(\.isFinite) else {
+            XCTFail("Requires the actual Play/Pause hit point from before the controls hid")
+            return
+        }
+        let pausePoint = CGPoint(x: CGFloat(coordinates[0]),y: CGFloat(coordinates[1]))
+        let pauseTap = playerCoordinate(app,at: pausePoint,viewport: viewport)
+        // A slow accessibility query can outlast the playing controls' reveal
+        // window. Tap the video and its now-visible pause button consecutively.
+        videoPoint.tap()
+        pauseTap.tap()
         let playPause = element(app,"player.play-pause")
-        playPause.tap()
         let paused = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@","Play"),object: playPause)
-        XCTAssertEqual(XCTWaiter.wait(for: [paused],timeout: 4),.completed,"The compact control must pause the actual player")
+        XCTAssertEqual(XCTWaiter.wait(for: [paused],timeout: 8),.completed,"The video tap must reveal an actionable control that pauses the actual player")
+        XCTAssertTrue(playPause.frame.insetBy(dx: -1,dy: -1).contains(pausePoint),"The cached touch must hit the actual playback button")
         element(app, "player.subtitles").tap()
         let settings = element(app, "player.subtitle.settings")
         let fixtureTrack = element(app,"player.subtitle.track.0")
@@ -557,7 +588,6 @@ final class QAAcceptanceTests: XCTestCase {
         assertNativeCaptionAndTransportFit(app,caption: caption)
         let originalCaptionFrame = caption.frame
         screenshot(app, "fixture-external-vtt-rendered")
-        revealPlayerControls(app)
         element(app, "player.subtitles").tap()
         for id in ["player.subtitle.larger", "player.subtitle.raise", "player.subtitle.style"] {
             let action = element(app, id)
@@ -567,14 +597,17 @@ final class QAAcceptanceTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(caption.frame.height,originalCaptionFrame.height)
         XCTAssertLessThan(caption.frame.maxY,originalCaptionFrame.maxY, "Raise must move the actual caption, not just accept a button tap")
         screenshot(app, "fixture-external-vtt-resized-and-raised")
-        revealPlayerControls(app)
         element(app, "player.subtitles").tap()
         let off = element(app, "player.subtitle.off")
         for _ in 0..<4 { if off.isHittable { break }; settings.swipeDown() }
         XCTAssertTrue(off.isHittable); off.tap(); element(app,"player.subtitle.done").tap()
         let captionOff = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false OR label == ''"),object: caption)
         XCTAssertEqual(XCTWaiter.wait(for: [captionOff],timeout: 4),.completed)
-        revealPlayerControls(app)
+        let portraitViewport = app.frame
+        let revealForClose = videoTapPoint(app,viewport: portraitViewport)
+        let closeFrame = element(app,"player.close").frame
+        XCTAssertFalse(closeFrame.isEmpty,"Back must remain reachable while paused")
+        let closeTap = playerCoordinate(app,at: CGPoint(x: closeFrame.midX,y: closeFrame.midY),viewport: portraitViewport)
         let beforeResume = Double(time.value as? String ?? "") ?? -1
         playPause.tap()
         let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { item,_ in
@@ -582,8 +615,8 @@ final class QAAcceptanceTests: XCTestCase {
             return beforeResume >= 0 && at >= beforeResume + 1
         },object: time)
         XCTAssertEqual(XCTWaiter.wait(for: [resumed],timeout: 12),.completed,"The custom Play control must resume actual decoded playback after the seek")
-        revealPlayerControls(app)
-        element(app, "player.close").tap()
+        revealForClose.tap()
+        closeTap.tap()
         gone(element(app, "qa.player.ready"))
         XCTAssertTrue(element(app, "nav.toggle").waitForExistence(timeout: 5))
     }

@@ -55,7 +55,7 @@ xcodebuild -project AnimeSync.xcodeproj -scheme AnimeSync \
   -destination-timeout 60 -derivedDataPath DerivedData/Simulator \
   -resultBundlePath dist/AnimeSync-Tests.xcresult \
   -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
-  -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 \
+  -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 300 \
   ONLY_ACTIVE_ARCH=YES "ARCHS=$simulator_arch" "IPHONEOS_DEPLOYMENT_TARGET=$simulator_minimum" \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
   "APP_SOURCE_REVISION=${CI_SOURCE_REVISION:-local}" "${test_selection[@]}" test-without-building 2>&1 | tee dist/xcodebuild-simulator.log

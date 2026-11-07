@@ -571,7 +571,8 @@ struct NativeChromeLayout {
         let clipped = video.intersection(safe)
         let content = clipped.isNull || clipped.isEmpty ? safe : clipped
         let gap: CGFloat = 8
-        let width = min(safe.width,max(min(320,safe.width),content.width - gap * 2))
+        let imageWidth = min(safe.width,max(min(320,safe.width),content.width - gap * 2))
+        let width = viewport.width > viewport.height ? min(imageWidth,340) : imageWidth
         let left = min(safe.maxX - width,max(safe.minX,content.midX - width / 2))
         let top = content.minY - safe.minY >= headerHeight + gap ? content.minY - headerHeight - gap : content.minY + gap
         let bottom = safe.maxY - content.maxY >= dockHeight + gap ? content.maxY + gap : content.maxY - dockHeight - gap
@@ -714,37 +715,78 @@ private struct PlaybackControlsFrameKey: PreferenceKey {
     static func reduce(value: inout CGRect,nextValue: () -> CGRect) { value = nextValue() }
 }
 
+#if DEBUG
+private struct QAPauseButtonFrameKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect,nextValue: () -> CGRect) {
+        let frame = nextValue()
+        if !frame.isEmpty { value = frame }
+    }
+}
+#endif
+
 @MainActor private struct NativeTransportBar: View {
     @ObservedObject var model: NativePlaybackModel
     let playing: Bool
+    let width: CGFloat
+    let compact: Bool
     var onInteraction: () -> Void
     var onScrubbing: (Bool) -> Void
     @State private var draft: Double?
     @State private var editing = false
     @State private var seekTask: Task<Void,Never>?
     @State private var pendingSeek: Double?
+    private var sidePadding: CGFloat { compact ? 10 : 14 }
     var body: some View {
         // Paused playback has no changing clock. Draft edits and the observed
         // seek/start model still refresh the dock after an explicit action.
         TimelineView(.animation(minimumInterval: 0.5,paused: !playing)) { _ in transport }
-            .padding(.horizontal,14).padding(.vertical,8)
-            .background(.black.opacity(0.65),in: RoundedRectangle(cornerRadius: 18))
+            .padding(.horizontal,sidePadding)
+            .padding(.vertical,compact ? 3 : 8)
+            .frame(width: width)
+            .background(.black.opacity(compact ? 0.5 : 0.65),in: RoundedRectangle(cornerRadius: compact ? 14 : 18))
             .onDisappear { seekTask?.cancel(); pendingSeek = nil; onScrubbing(false) }
     }
     private var transport: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 20) {
-                Button { skip(-10) } label: { Image(systemName: "gobackward.10").frame(width: 44,height: 44) }
+        let sliderScale: CGFloat = compact ? 0.75 : 1
+        let sliderWidth = max(1,width - sidePadding * 2)
+        return VStack(spacing: compact ? 0 : 4) {
+            HStack(spacing: compact ? 6 : 20) {
+                Button { skip(-10) } label: {
+                    Image(systemName: "gobackward.10")
+                        .font(.system(size: compact ? 15 : 18))
+                        .frame(width: 44,height: 44)
+                        .contentShape(Rectangle())
+                }
                     .accessibilityLabel("Back ten seconds").accessibilityIdentifier("player.skip.back")
                     .disabled(!model.canSeek)
                 Button {
                     onInteraction()
                     if model.player.rate > 0 { model.player.pause() }
                     else { Task { await model.play(explicit: true) } }
-                } label: { Image(systemName: playing ? "pause.fill" : "play.fill").font(.title2).frame(width: 44,height: 44) }
+                } label: {
+                    Image(systemName: playing ? "pause.fill" : "play.fill")
+                        .font(compact ? .system(size: 17,weight: .semibold) : .title2)
+                        .frame(width: 44,height: 44)
+                        .contentShape(Rectangle())
+                }
                     .accessibilityLabel(playing ? "Pause" : "Play").accessibilityIdentifier("player.play-pause")
                     .disabled(model.isStarting || model.isSeeking || model.handoffInProgress)
-                Button { skip(10) } label: { Image(systemName: "goforward.10").frame(width: 44,height: 44) }
+                    #if DEBUG
+                    .background {
+                        if model.fixture {
+                            GeometryReader { geometry in
+                                Color.clear.preference(key: QAPauseButtonFrameKey.self,value: geometry.frame(in: .global))
+                            }.allowsHitTesting(false)
+                        }
+                    }
+                    #endif
+                Button { skip(10) } label: {
+                    Image(systemName: "goforward.10")
+                        .font(.system(size: compact ? 15 : 18))
+                        .frame(width: 44,height: 44)
+                        .contentShape(Rectangle())
+                }
                     .accessibilityLabel("Forward ten seconds").accessibilityIdentifier("player.skip.forward")
                     .disabled(!model.canSeek)
             }.frame(maxWidth: .infinity)
@@ -760,9 +802,15 @@ private struct PlaybackControlsFrameKey: PreferenceKey {
                 if value { draft = model.position }
                 else if let draft { commit(draft) }
             }).tint(.white).disabled(!model.canSeek && !editing)
+                // Scale the native thumb and track together. Compensate for
+                // horizontal scaling so the rail keeps its full seek range.
+                .frame(width: sliderWidth / sliderScale)
+                .scaleEffect(sliderScale)
+                .frame(width: sliderWidth,height: compact ? 26 : nil)
                 .accessibilityLabel("Episode timeline").accessibilityIdentifier("player.timeline")
             Text(Self.time(draft ?? model.position) + " / " + Self.time(model.duration))
-                .font(.caption.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7)
+                .font((compact ? Font.system(size: 10) : .caption).monospacedDigit())
+                .lineLimit(1).minimumScaleFactor(0.7)
                 .frame(maxWidth: .infinity,alignment: .leading)
                 .accessibilityLabel("Playback position").accessibilityIdentifier("player.time")
         }.buttonStyle(.plain).foregroundStyle(.white)
@@ -799,6 +847,9 @@ private struct PlaybackControlsFrameKey: PreferenceKey {
     @State private var scrubbing = false
     @State private var playing = false
     @State private var transportHeight: CGFloat = 96
+    #if DEBUG
+    @State private var qaPauseFrame: CGRect = .zero
+    #endif
     var onTV: () -> Void
     var tvPanelPresented: Bool = false
     var body: some View {
@@ -833,7 +884,9 @@ private struct PlaybackControlsFrameKey: PreferenceKey {
             Color.black
             NativePlayerController(model: model,onVideoTap: { toolbar.reveal() },controlsFrame: toolbar.visible ? layout.dock : nil,
                                    headerFrame: toolbar.visible ? layout.header : nil,geometry: videoGeometry)
-            if toolbar.visible, !videoGeometry.safeViewport.isEmpty { chrome(layout: layout).transition(.opacity) }
+            if toolbar.visible, !videoGeometry.safeViewport.isEmpty {
+                chrome(layout: layout,compact: geometry.size.width > geometry.size.height).transition(.opacity)
+            }
             if model.message != "Playing" {
                 VStack { Spacer(); Text(model.message).font(.footnote).multilineTextAlignment(.center)
                     .padding(10).background(.black.opacity(0.7),in: RoundedRectangle(cornerRadius: 12))
@@ -845,12 +898,25 @@ private struct PlaybackControlsFrameKey: PreferenceKey {
                 Text(model.videoReady ? "Ready" : "Waiting").font(.caption2).opacity(0.01).accessibilityIdentifier("qa.player.ready").accessibilityValue(model.videoReady ? "ready" : "waiting").allowsHitTesting(false)
                 Text("Playback position").font(.caption2).opacity(0.01).accessibilityIdentifier("qa.player.time").accessibilityValue(String(model.qaPosition)).allowsHitTesting(false)
                 Text(toolbar.visible ? "Controls visible" : "Controls hidden").font(.caption2).opacity(0.01).accessibilityIdentifier("qa.player.controls").allowsHitTesting(false)
+                if !qaPauseFrame.isEmpty {
+                    // Preserve the last rendered button position through auto-hide,
+                    // so UI tests can perform two real taps without an AX lookup in between.
+                    Text("Play or pause hit point").font(.caption2).opacity(0.01)
+                        .accessibilityIdentifier("qa.player.pause-point")
+                        .accessibilityValue(Text(verbatim: "\(qaPauseFrame.midX),\(qaPauseFrame.midY)"))
+                        .allowsHitTesting(false)
+                }
             }
             #endif
         }.coordinateSpace(name: "native.player")
             .onPreferenceChange(PlaybackControlsFrameKey.self) {
                 if $0.height > 0, abs(transportHeight - $0.height) > 0.5 { transportHeight = $0.height }
             }
+            #if DEBUG
+            .onPreferenceChange(QAPauseButtonFrameKey.self) { frame in
+                if !frame.isEmpty, frame != qaPauseFrame { qaPauseFrame = frame }
+            }
+            #endif
     }
     private func chromeLayout(in geometry: GeometryProxy) -> NativeChromeLayout {
         let insets = geometry.safeAreaInsets
@@ -859,32 +925,38 @@ private struct PlaybackControlsFrameKey: PreferenceKey {
                                          safeViewport: videoGeometry.safeViewport.isEmpty ? nil : videoGeometry.safeViewport,
                                          dockHeight: transportHeight)
     }
-    private func chrome(layout: NativeChromeLayout) -> some View {
+    private func chrome(layout: NativeChromeLayout,compact: Bool) -> some View {
         ZStack(alignment: .topLeading) {
-            controls.frame(width: layout.header.width,height: layout.header.height)
+            controls(compact: compact).frame(width: layout.header.width,height: layout.header.height)
                 .position(x: layout.header.midX,y: layout.header.midY)
-            NativeTransportBar(model: model,playing: playing,onInteraction: { toolbar.reveal() },onScrubbing: {
+            NativeTransportBar(model: model,playing: playing,width: layout.dock.width,compact: compact,onInteraction: { toolbar.reveal() },onScrubbing: {
                 scrubbing = $0; updateToolbar()
-            }).frame(width: layout.dock.width).background(GeometryReader { proxy in
+            }).background(GeometryReader { proxy in
                 Color.clear.preference(key: PlaybackControlsFrameKey.self,value: proxy.frame(in: .named("native.player")))
             }).accessibilityElement(children: .contain).accessibilityIdentifier("player.transport")
                 .position(x: layout.dock.midX,y: layout.dock.midY)
         }
     }
-    private var controls: some View {
-        HStack(spacing: 8) {
+    private func controls(compact: Bool) -> some View {
+        HStack(spacing: compact ? 3 : 8) {
             Button { model.onClose?() } label: { Image(systemName: "chevron.left") }
                 .accessibilityLabel("Back").accessibilityIdentifier("player.close")
-            Text(model.metadata.title).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+            Text(model.metadata.title)
+                .font((compact ? Font.footnote : .subheadline).weight(.semibold))
+                .lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength: 0)
             Button { toolbar.reveal(); captions = true } label: { Image(systemName: "captions.bubble") }
                 .accessibilityLabel("Subtitles").accessibilityIdentifier("player.subtitles")
-            Button { toolbar.reveal(); onTV() } label: { Image("tv-connect").resizable().renderingMode(.template).scaledToFit().frame(width: 20,height: 20) }
+            Button { toolbar.reveal(); onTV() } label: {
+                Image("tv-connect").resizable().renderingMode(.template).scaledToFit()
+                    .frame(width: compact ? 16 : 20,height: compact ? 16 : 20)
+            }
                 .accessibilityLabel("Play on TV").disabled(model.isSeeking || model.handoffInProgress)
             Button { toolbar.reveal(); options = true } label: { Image(systemName: "ellipsis") }
                 .accessibilityLabel("Playback options").accessibilityIdentifier("player.options")
-        }.buttonStyle(PlaybackIconButtonStyle()).foregroundStyle(.white)
-            .padding(.horizontal,4).background(.black.opacity(0.45),in: Capsule())
+        }.buttonStyle(PlaybackIconButtonStyle(compact: compact)).foregroundStyle(.white)
+            .padding(.horizontal,4)
+            .background { Capsule().fill(.black.opacity(0.45)).frame(height: compact ? 32 : 44) }
             .accessibilityIdentifier("player.toolbar")
     }
     private func updateToolbar(playing: Bool? = nil) {
@@ -894,9 +966,13 @@ private struct PlaybackControlsFrameKey: PreferenceKey {
 }
 
 private struct PlaybackIconButtonStyle: ButtonStyle {
+    let compact: Bool
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 18,weight: .semibold)).frame(width: 44,height: 44)
-            .background(.white.opacity(configuration.isPressed ? 0.15 : 0),in: Circle())
+        configuration.label
+            .font(.system(size: compact ? 15 : 18,weight: .semibold))
+            .frame(width: 44,height: 44)
+            .contentShape(Rectangle())
+            .background { Circle().fill(.white.opacity(configuration.isPressed ? 0.15 : 0)).frame(width: compact ? 32 : 44) }
     }
 }
 struct SubtitleSettings: View {

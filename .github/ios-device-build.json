@@ -1,6 +1,6 @@
 {
-  "version": "0.1.7",
-  "build": 8,
-  "reason": "Center native transport, place elapsed/duration below the timeline, keep captions above the actual dock and match the Chrome reference with shared Roboto Bold and a crisp outline on transparent background; retain adjustable size",
-  "simulator": "Public standard-runner build: execute all102 app unit tests and10 deterministic native UI fixtures with exact counts and zero skips. Report the separately excluded live public-site case without counting it passed."
+  "version": "0.1.8",
+  "build": 9,
+  "reason": "Narrow and slim the landscape controls while preserving touch targets, centered transport, the timeline timer and caption clearance.",
+  "simulator": "Run 102 app unit tests and 10 deterministic UI fixtures. Verify the compact layout, actual playback and seek, and TV pairing validation."
 }
