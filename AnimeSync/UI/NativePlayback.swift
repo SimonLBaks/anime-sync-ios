@@ -972,7 +972,6 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
         }.buttonStyle(PlaybackIconButtonStyle(compact: compact)).foregroundStyle(.white)
             .padding(.horizontal,4)
             .background { Capsule().fill(.black.opacity(0.45)).frame(height: compact ? 32 : 44) }
-            .accessibilityIdentifier("player.toolbar")
     }
     private func updateToolbar(playing: Bool? = nil) {
         toolbar.update(playing: playing ?? (model.player.timeControlStatus == .playing),active: appeared && scenePhase == .active,

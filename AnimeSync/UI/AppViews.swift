@@ -438,7 +438,13 @@ struct EpisodeScreen: View {
                     }
                     Button { Task { await model.playHere() } } label: { Label("Play here",systemImage: "play.fill").foregroundStyle(Theme.background).frame(maxWidth: .infinity).padding(14) }.buttonStyle(.borderedProminent).accessibilityIdentifier("destination.here")
                     if model.provider.sources.isEmpty { Text(model.provider.sourceStatus.rawValue).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("source.status") }
-                    Button { model.playOnTV() } label: { Label("Play on TV",systemImage: "tv").frame(maxWidth: .infinity).padding(10) }.buttonStyle(.bordered).accessibilityIdentifier("destination.tv")
+                    Button { model.playOnTV() } label: {
+                        HStack(spacing: 8) {
+                            Image(decorative: "tv-connect").resizable().renderingMode(.template).scaledToFit()
+                                .frame(width: 20,height: 20)
+                            Text("Play on TV")
+                        }.frame(maxWidth: .infinity).padding(10)
+                    }.buttonStyle(.bordered).accessibilityIdentifier("destination.tv")
                     websiteFallback
                     MiruroSourceControls(model: model)
                     if !model.provider.episodes.isEmpty { EpisodeWindow(episodes: EpisodePresentation.ordered(model.provider.episodes),currentNumber: metadata.episode,complete: model.provider.episodeInventoryComplete,height: episodeHeight,select: { model.selectEpisode(id: $0) },isWatched: { model.sync.isEpisodeWatched(site: metadata.site,animeID: metadata.animeID,episode: EpisodePresentation.number($0)) }) }
