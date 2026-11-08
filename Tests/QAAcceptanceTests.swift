@@ -604,6 +604,15 @@ final class QAAcceptanceTests: XCTestCase {
         assertNativeCaptionAndTransportFit(app,caption: caption)
         let originalCaptionFrame = caption.frame
         screenshot(app, "fixture-external-vtt-rendered")
+        element(app,"player.options").tap()
+        let done = element(app,"player.options.done")
+        XCTAssertTrue(done.waitForExistence(timeout: 6))
+        for label in ["Speed", "Audio", "Unmute", "Use website player"] {
+            XCTAssertTrue(app.buttons[label].exists, "Playback options must include \(label)")
+        }
+        screenshot(app,"fixture-playback-options")
+        done.tap()
+        XCTAssertEqual(playPause.label,"Play","Closing options must keep playback paused")
         element(app, "player.subtitles").tap()
         for id in ["player.subtitle.larger", "player.subtitle.raise"] {
             let action = element(app, id)

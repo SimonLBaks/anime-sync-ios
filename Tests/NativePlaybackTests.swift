@@ -220,22 +220,24 @@ import CoreMedia
         XCTAssertTrue(NativeCaptionLayout.available(region: region,margin: 0.1,controls: CGRect(x: 0,y: 8,width: 600,height: 292)).isEmpty)
     }
 
-    func testStandardCaptionsStayAtTheBottomWithVisibleControlsInEitherOrientation() {
+    func testStandardCaptionsClearVisibleControlsAndReturnToThePictureEdge() {
         XCTAssertEqual(NativeCaptionLayout.defaultMargin,0.025)
         for viewport in [CGRect(x: 0,y: 0,width: 852,height: 393),CGRect(x: 0,y: 0,width: 402,height: 874)] {
-            let video = viewport.width > viewport.height
+            let landscape = viewport.width > viewport.height
+            let video = landscape
                 ? viewport.insetBy(dx: 76,dy: 0) : CGRect(x: 0,y: 268,width: 402,height: 226)
             let margin = NativeCaptionLayout.defaultMargin
             let font = NativeCaptionLayout.fontSize(preference: 22,videoHeight: video.height)
             let lane = NativeCaptionLayout.laneHeight(region: video,fontSize: font,margin: margin)
-            let layout = NativeChromeLayout.fitted(video: video,viewport: viewport,safeInsets: .zero,captionLane: lane)
+            let layout = NativeChromeLayout.fitted(video: video,viewport: viewport,safeInsets: .zero,captionLane: lane,controlsVisible: true)
+            let controls = layout.dock.union(layout.shortcuts)
             let size = CGSize(width: 180,height: 40)
-            let shown = NativeCaptionLayout.frame(region: video,textSize: size,margin: margin,controls: layout.dock,header: layout.header)
+            let shown = NativeCaptionLayout.frame(region: video,textSize: size,margin: margin,controls: controls,header: layout.header,preferAboveControls: landscape)
             let hidden = NativeCaptionLayout.frame(region: video,textSize: size,margin: margin,controls: nil)
             XCTAssertFalse(shown.isEmpty)
-            XCTAssertEqual(shown.maxY,hidden.maxY,accuracy: 0.1)
-            XCTAssertEqual(video.maxY - shown.maxY,NativeCaptionLayout.bottomInset(region: video,margin: margin),accuracy: 0.1)
-            XCTAssertFalse(shown.intersects(layout.dock))
+            XCTAssertEqual(video.maxY - hidden.maxY,NativeCaptionLayout.bottomInset(region: video,margin: margin),accuracy: 0.1)
+            XCTAssertFalse(shown.intersects(controls))
+            XCTAssertEqual(shown.maxY,landscape ? controls.minY - 12 : hidden.maxY,accuracy: 0.1)
         }
     }
 

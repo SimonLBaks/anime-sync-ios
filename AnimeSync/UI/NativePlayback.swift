@@ -98,6 +98,11 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     @Published var captionDelay: Double = 0 { didSet { refreshCaption() } }
     @Published var captionSelection = "automatic"
     @Published var embeddedOptions: [AVMediaSelectionOption] = []
+    @Published private(set) var audioOptions: [AVMediaSelectionOption] = []
+    @Published private(set) var selectedAudio: AVMediaSelectionOption?
+    @Published private(set) var playbackSpeed: Float = 1
+    private var audioGroup: AVMediaSelectionGroup?
+    static let playbackSpeeds: [Float] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]
     @Published var isStarting = false
     @Published private(set) var isSeeking = false
     @Published private(set) var handoffInProgress = false
@@ -224,8 +229,27 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             installEmbeddedCaptionOutput(on: item)
             player.replaceCurrentItem(with: item); applyStyles()
             Task { [weak self] in await self?.readEmbeddedTracks(item) }
+            Task { [weak self] in await self?.readAudioTracks(item) }
             await play(explicit: true,expectedGeneration: pendingGeneration)
         } catch { message = error.localizedDescription }
+    }
+    private func readAudioTracks(_ item: AVPlayerItem) async {
+        guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible),
+              !disposed, !closing, player.currentItem === item else { return }
+        audioGroup = group
+        audioOptions = group.options
+    }
+    func selectAudio(_ option: AVMediaSelectionOption?) {
+        guard !disposed, !closing, let item = player.currentItem, let group = audioGroup else { return }
+        if let option { item.select(option,in: group) }
+        else { item.selectMediaOptionAutomatically(in: group) }
+        selectedAudio = option
+    }
+    func setPlaybackSpeed(_ speed: Float) {
+        guard !disposed, !closing, Self.playbackSpeeds.contains(speed) else { return }
+        playbackSpeed = speed
+        player.defaultRate = speed
+        if player.rate > 0 { player.rate = speed }
     }
     func installEmbeddedCaptionOutput(on item: AVPlayerItem) {
         let adapter = EmbeddedCaptionOutput { [weak self,weak item] strings in
@@ -995,11 +1019,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                 Text("Episode \(episode.number)")
             }
             .sheet(isPresented: $captions) { SubtitleSettings(model: model) }
-            .confirmationDialog("Playback options",isPresented: $options,titleVisibility: .visible) {
-                Button(model.player.isMuted ? "Unmute" : "Mute") { model.player.isMuted.toggle(); toolbar.reveal() }
-                Button("Use website player") { model.onFallback?() }
-                Button("Cancel",role: .cancel) { }
-            }
+            .sheet(isPresented: $options) { PlaybackOptions(model: model) }
             .onAppear { appeared = true; playing = model.player.rate > 0; updateToolbar() }
             .onDisappear { appeared = false; toolbar.stop() }
             .onReceive(model.player.publisher(for: \.timeControlStatus).receive(on: RunLoop.main)) {
@@ -1163,6 +1183,69 @@ private struct PlaybackIconButtonStyle: ButtonStyle {
             .background { Circle().fill(.white.opacity(configuration.isPressed ? 0.15 : 0)).frame(width: landscape ? 48 : 44) }
     }
 }
+private struct PlaybackOptions: View {
+    @ObservedObject var model: NativePlaybackModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var muted = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    DisclosureGroup("Speed") {
+                        ForEach(NativePlaybackModel.playbackSpeeds,id: \.self) { speed in
+                            let label = speed == 1 ? "Normal" : speed.formatted(.number.precision(.fractionLength(0...2))) + "×"
+                            PlaybackSettingChoice(label: label,selected: model.playbackSpeed == speed) {
+                                model.setPlaybackSpeed(speed)
+                            }
+                        }
+                    }
+                    DisclosureGroup("Audio") {
+                        PlaybackSettingChoice(label: "Auto",selected: model.selectedAudio == nil) { model.selectAudio(nil) }
+                        ForEach(Array(model.audioOptions.enumerated()),id: \.offset) { _,option in
+                            PlaybackSettingChoice(label: option.displayName,selected: model.selectedAudio == option) {
+                                model.selectAudio(option)
+                            }
+                        }
+                    }
+                    Button(muted ? "Unmute" : "Mute") {
+                        model.player.isMuted.toggle()
+                        muted = model.player.isMuted
+                    }
+                    if let fallback = model.onFallback {
+                        Button("Use website player") { dismiss(); fallback() }
+                    }
+                }
+            }
+            .navigationTitle("Playback options")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }.accessibilityIdentifier("player.options.done")
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .onAppear { muted = model.player.isMuted }
+    }
+}
+
+private struct PlaybackSettingChoice: View {
+    let label: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(label)
+                Spacer()
+                if selected { Image(systemName: "checkmark").accessibilityHidden(true) }
+            }
+        }.accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
 struct SubtitleSettings: View {
     @ObservedObject var model: NativePlaybackModel
     @Environment(\.dismiss) private var dismiss
@@ -1209,13 +1292,7 @@ struct SubtitleSettings: View {
         }.preferredColorScheme(.dark)
     }
     private func choice(_ name: String,selected: Bool,action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                Text(name)
-                Spacer()
-                if selected { Image(systemName: "checkmark").accessibilityHidden(true) }
-            }
-        }.accessibilityAddTraits(selected ? .isSelected : [])
+        PlaybackSettingChoice(label: name,selected: selected,action: action)
     }
 }
 
