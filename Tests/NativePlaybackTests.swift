@@ -251,7 +251,7 @@ import CoreMedia
         XCTAssertEqual(video.maxY - frame.maxY,9.825,accuracy: 0.01)
     }
 
-    func testChromeUsesLetterboxSpaceInPortraitAndActualImageWidthInLandscape() {
+    func testChromeUsesLetterboxSpaceInPortraitAndScreenEdgeInLandscape() {
         let portraitViewport = CGRect(x: 0,y: 0,width: 402,height: 874)
         let portraitVideo = CGRect(x: 0,y: 286,width: 402,height: 302)
         let portraitInsets = UIEdgeInsets(top: 62,left: 0,bottom: 34,right: 0)
@@ -267,7 +267,10 @@ import CoreMedia
         let image = landscapeVideo.intersection(landscapeViewport.inset(by: landscapeInsets))
         XCTAssertTrue(image.contains(landscape.header)); XCTAssertTrue(image.contains(landscape.dock))
         XCTAssertEqual(landscape.dock.midX,image.midX)
-        XCTAssertEqual(landscape.dock.width,340)
+        XCTAssertEqual(landscape.dock.width,0.70 * landscapeViewport.inset(by: landscapeInsets).width,accuracy: 0.1)
+        XCTAssertEqual(landscape.dock.maxY,landscapeViewport.maxY - landscapeInsets.bottom - 8)
+        let withCaptions = NativeChromeLayout.fitted(video: landscapeVideo,viewport: landscapeViewport,safeInsets: landscapeInsets,dockHeight: 88,captionLane: 80)
+        XCTAssertEqual(withCaptions.dock,landscape.dock)
         XCTAssertEqual(landscape.header.width,landscape.dock.width)
         let caption = NativeCaptionLayout.frame(region: image,textSize: CGSize(width: 300,height: 70),margin: 0.1,
                                                 controls: landscape.dock,header: landscape.header)
@@ -317,6 +320,11 @@ import CoreMedia
             XCTAssertEqual(hidden.segment.maxX,video.maxX - 8)
             XCTAssertEqual(hidden.segment.maxY,video.maxY - 52)
             XCTAssertEqual(shown.segment.maxX,hidden.segment.maxX)
+            if viewport.width < viewport.height {
+                let noCaptions = NativeChromeLayout.fitted(video: video,viewport: viewport,safeInsets: .zero,controlsVisible: true)
+                XCTAssertEqual(shown.segment.maxX,shown.dock.maxX)
+                XCTAssertEqual(noCaptions.segment.maxY,noCaptions.dock.minY - 16)
+            }
             XCTAssertTrue(video.contains(shown.segment))
             XCTAssertFalse(shown.segment.intersects(shown.dock))
         }

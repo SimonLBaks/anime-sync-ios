@@ -562,13 +562,13 @@ enum NativeCaptionLayout {
         let chosen = preference.isFinite ? preference : 22
         return min(96,max(10,videoHeight * 0.06 * CGFloat(chosen / 22)))
     }
-    static func available(region: CGRect,margin: Double,controls: CGRect?,header: CGRect? = nil) -> CGRect {
+    static func available(region: CGRect,margin: Double,controls: CGRect?,header: CGRect? = nil,preferAboveControls: Bool = false) -> CGRect {
         guard region.width > 0, region.height > 0 else { return .zero }
         var top = region.minY + 4
         var bottom = region.maxY - bottomInset(region: region,margin: margin)
         if let controls, !controls.isEmpty, controls.intersects(region) {
             let lowerTop = controls.maxY + 6
-            if bottom - lowerTop >= min(22,region.height * 0.10) { top = max(top,lowerTop) }
+            if !preferAboveControls, bottom - lowerTop >= min(22,region.height * 0.10) { top = max(top,lowerTop) }
             else { bottom = min(bottom,controls.minY - 12) }
         }
         if let header, !header.isEmpty, header.intersects(region) { top = max(top,header.maxY + 8) }
@@ -589,8 +589,8 @@ enum NativeCaptionLayout {
         }
         return low
     }
-    static func frame(region: CGRect,textSize: CGSize,margin: Double,controls: CGRect?,header: CGRect? = nil,padding: CGSize = CGSize(width: 4,height: 2)) -> CGRect {
-        let space = available(region: region,margin: margin,controls: controls,header: header)
+    static func frame(region: CGRect,textSize: CGSize,margin: Double,controls: CGRect?,header: CGRect? = nil,padding: CGSize = CGSize(width: 4,height: 2),preferAboveControls: Bool = false) -> CGRect {
+        let space = available(region: region,margin: margin,controls: controls,header: header,preferAboveControls: preferAboveControls)
         guard !space.isEmpty else { return .zero }
         let width = min(max(0,textSize.width + padding.width * 2),space.width)
         let height = min(max(0,textSize.height + padding.height * 2),space.height)
@@ -678,23 +678,28 @@ struct NativeChromeLayout {
         let content = clipped.isNull || clipped.isEmpty ? safe : clipped
         let gap: CGFloat = 8
         let imageWidth = min(safe.width,max(min(320,safe.width),content.width - gap * 2))
-        let width = viewport.width > viewport.height ? min(imageWidth,340) : imageWidth
-        let left = min(safe.maxX - width,max(safe.minX,content.midX - width / 2))
-        let top = content.minY - safe.minY >= headerHeight + gap ? content.minY - headerHeight - gap : content.minY + gap
-        let bottom = safe.maxY - content.maxY >= dockHeight + gap ? content.maxY + gap : content.maxY - dockHeight - gap
+        let landscape = viewport.width > viewport.height
+        let width = landscape ? min(600,max(0,safe.width - 2 * gap),max(248,safe.width * 0.70)) : imageWidth
+        let center = landscape ? safe.midX : content.midX
+        let left = min(safe.maxX - width,max(safe.minX,center - width / 2))
+        let portraitTop = content.minY - safe.minY >= headerHeight + gap ? content.minY - headerHeight - gap : content.minY + gap
+        let portraitDockY = safe.maxY - content.maxY >= dockHeight + gap ? content.maxY + gap : content.maxY - dockHeight - gap
+        let top = landscape ? safe.minY + gap : portraitTop
+        let bottom = landscape ? safe.maxY - dockHeight - gap : portraitDockY
         let headerY = max(safe.minY,min(safe.maxY - headerHeight,top))
         var dockY = max(safe.minY,min(safe.maxY - dockHeight,bottom))
-        if bottom < content.maxY, captionLane > 0 {
+        if !landscape, bottom < content.maxY, captionLane > 0 {
             let lifted = min(viewport.maxY,video.maxY) - captionLane - dockHeight
             if lifted >= headerY + headerHeight + gap { dockY = min(dockY,lifted) }
         }
         let dock = CGRect(x: left,y: dockY,width: width,height: dockHeight)
-        let segmentWidth = min(144,max(0,content.width - 2 * gap))
-        let segmentRight = content.maxX - gap
+        let segmentWidth = min(144,max(0,landscape ? content.width - 2 * gap : dock.width))
+        let segmentRight = landscape ? content.maxX - gap : dock.maxX
         let segmentLeft = segmentRight - segmentWidth
         var segmentBottom = content.maxY - max(gap,captionLane)
-        if controlsVisible, segmentLeft < dock.maxX + gap, segmentRight > dock.minX - gap {
-            let captionsAboveDock = captionLane > 0 && dock.maxY > video.maxY - captionLane && dock.intersects(video)
+        if (!landscape || controlsVisible), segmentLeft < dock.maxX + gap, segmentRight > dock.minX - gap {
+            let captionsAboveDock = captionLane > 0 && dock.intersects(video) &&
+                (landscape || dock.maxY > video.maxY - captionLane)
             segmentBottom = min(segmentBottom,dock.minY - (captionsAboveDock ? captionLane : gap))
         }
         let segment = CGRect(x: segmentLeft,y: max(safe.minY,segmentBottom - 44),width: segmentWidth,height: 44)
@@ -765,7 +770,8 @@ enum NativeSafeArea {
         qaVideoRegion.frame = region
         #endif
         guard !captionText.isEmpty, region.width > 0, region.height > 0 else { caption.isHidden = true; return }
-        let space = NativeCaptionLayout.available(region: region,margin: captionMargin,controls: controlsFrame,header: headerFrame)
+        let landscape = view.bounds.width > view.bounds.height
+        let space = NativeCaptionLayout.available(region: region,margin: captionMargin,controls: controlsFrame,header: headerFrame,preferAboveControls: landscape)
         guard space.width > 8, space.height > 4 else { caption.isHidden = true; return }
         let preferred = NativeCaptionLayout.fontSize(preference: captionSize,videoHeight: video.height)
         caption.contentPadding = NativeCaptionStyle.padding(size: preferred)
@@ -776,7 +782,7 @@ enum NativeSafeArea {
         let fitted = NativeCaptionLayout.fittedFontSize(preferred: preferred,available: space.size,measure: measure)
         caption.outlineRadius = NativeCaptionStyle.outlineRadius(size: fitted)
         let size = measure(fitted)
-        caption.frame = NativeCaptionLayout.frame(region: region,textSize: size,margin: captionMargin,controls: controlsFrame,header: headerFrame,padding: .zero)
+        caption.frame = NativeCaptionLayout.frame(region: region,textSize: size,margin: captionMargin,controls: controlsFrame,header: headerFrame,padding: .zero,preferAboveControls: landscape)
         caption.isHidden = false
     }
 }
@@ -847,34 +853,33 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     @ObservedObject var model: NativePlaybackModel
     let playing: Bool
     let width: CGFloat
-    let compact: Bool
+    let landscape: Bool
     var onInteraction: () -> Void
     var onScrubbing: (Bool) -> Void
     @State private var draft: Double?
     @State private var editing = false
     @State private var seekTask: Task<Void,Never>?
     @State private var pendingSeek: Double?
-    private var sidePadding: CGFloat { compact ? 10 : 14 }
+    private var sidePadding: CGFloat { landscape ? 18 : 14 }
     var body: some View {
         // Paused playback has no changing clock. Draft edits and the observed
         // seek/start model still refresh the dock after an explicit action.
         TimelineView(.animation(minimumInterval: 0.5,paused: !playing)) { _ in transport }
             .padding(.horizontal,sidePadding)
-            .padding(.vertical,compact ? 3 : 8)
+            .padding(.vertical,8)
             .frame(width: width)
-            .background(.black.opacity(compact ? 0.5 : 0.65),in: RoundedRectangle(cornerRadius: compact ? 14 : 18))
+            .background(.black.opacity(0.65),in: RoundedRectangle(cornerRadius: 18))
             .onDisappear { seekTask?.cancel(); pendingSeek = nil; onScrubbing(false) }
     }
     private var transport: some View {
-        let sliderScale: CGFloat = compact ? 0.75 : 1
-        let actionWidth: CGFloat = 44
+        let actionWidth: CGFloat = landscape ? 48 : 44
         let actionCount: CGFloat = model.nextEpisode == nil ? 1 : 2
         let sliderWidth = max(1,width - sidePadding * 2 - actionWidth * actionCount - 4)
-        return VStack(spacing: compact ? 0 : 4) {
-            HStack(spacing: compact ? 6 : 20) {
+        return VStack(spacing: 4) {
+            HStack(spacing: landscape ? 24 : 20) {
                 Button { skip(-10) } label: {
                     Image(systemName: "gobackward.10")
-                        .font(.system(size: compact ? 15 : 18))
+                        .font(.system(size: landscape ? 21 : 18))
                         .frame(width: 44,height: 44)
                         .contentShape(Rectangle())
                 }
@@ -886,7 +891,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                     else { Task { await model.play(explicit: true) } }
                 } label: {
                     Image(systemName: playing ? "pause.fill" : "play.fill")
-                        .font(compact ? .system(size: 17,weight: .semibold) : .title2)
+                        .font(landscape ? .system(size: 25,weight: .semibold) : .title2)
                         .frame(width: 44,height: 44)
                         .contentShape(Rectangle())
                 }
@@ -903,7 +908,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                     #endif
                 Button { skip(10) } label: {
                     Image(systemName: "goforward.10")
-                        .font(.system(size: compact ? 15 : 18))
+                        .font(.system(size: landscape ? 21 : 18))
                         .frame(width: 44,height: 44)
                         .contentShape(Rectangle())
                 }
@@ -914,7 +919,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                     if model.isStarting || model.isSeeking { ProgressView().controlSize(.small).frame(width: 24,height: 44) }
                 }
             HStack(spacing: 0) {
-                VStack(spacing: compact ? 0 : 4) {
+                VStack(spacing: 4) {
                     Slider(value: Binding(get: { min(max(0,draft ?? model.position),max(1,model.duration)) },set: { value in
                         draft = value
                         // Accessibility adjustments need not start a touch drag.
@@ -924,20 +929,16 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                         if value { draft = model.position }
                         else if let draft { commit(draft) }
                     }).tint(.white).disabled(!model.canSeek && !editing)
-                        // Scale the native thumb and track together. Compensate for
-                        // horizontal scaling so the rail keeps its full seek range.
-                        .frame(width: sliderWidth / sliderScale)
-                        .scaleEffect(sliderScale)
-                        .frame(width: sliderWidth,height: compact ? 26 : nil)
+                        .frame(width: sliderWidth)
                         .accessibilityLabel("Episode timeline").accessibilityIdentifier("player.timeline")
                     Text(Self.time(draft ?? model.position) + " / " + Self.time(model.duration))
-                        .font((compact ? Font.system(size: 10) : .caption).monospacedDigit())
+                        .font((landscape ? Font.system(size: 13) : .caption).monospacedDigit())
                         .lineLimit(1).minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity,alignment: .leading)
                         .accessibilityLabel("Playback position").accessibilityIdentifier("player.time")
                 }.padding(.trailing,4)
                 Button { skip(90) } label: {
-                    Text("+90s").font(.system(size: 13,weight: .semibold))
+                    Text("+90s").font(.system(size: landscape ? 15 : 13,weight: .semibold))
                         .frame(width: actionWidth,height: 44).contentShape(Rectangle())
                 }
                 .accessibilityLabel("Forward 90 seconds").accessibilityIdentifier("player.skip.90")
@@ -946,7 +947,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                     Button {
                         onInteraction(); model.advanceEpisode()
                     } label: {
-                        Image(systemName: "forward.end.fill").font(.system(size: 16,weight: .semibold))
+                        Image(systemName: "forward.end.fill").font(.system(size: landscape ? 20 : 16,weight: .semibold))
                             .frame(width: actionWidth,height: 44).contentShape(Rectangle())
                     }
                     .accessibilityLabel("Next episode").accessibilityIdentifier("player.next-episode")
@@ -1041,7 +1042,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
             },controlsFrame: toolbar.visible ? layout.dock : nil,
                                    headerFrame: toolbar.visible ? layout.header : nil,geometry: videoGeometry)
             if toolbar.visible, !videoGeometry.safeViewport.isEmpty {
-                chrome(layout: layout,compact: geometry.size.width > geometry.size.height).transition(.opacity)
+                chrome(layout: layout,landscape: geometry.size.width > geometry.size.height).transition(.opacity)
             }
             if let segment = model.activeSegment, !layout.segment.isEmpty {
                 Button(segment.kind.title) { Task { await model.skip(segment) } }
@@ -1090,13 +1091,13 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
         return NativeChromeLayout.fitted(video: videoGeometry.region,viewport: CGRect(origin: .zero,size: geometry.size),
                                          safeInsets: UIEdgeInsets(top: insets.top,left: insets.leading,bottom: insets.bottom,right: insets.trailing),
                                          safeViewport: videoGeometry.safeViewport.isEmpty ? nil : videoGeometry.safeViewport,
-                                         dockHeight: transportHeight,captionLane: captionLane,controlsVisible: toolbar.visible)
+                                         headerHeight: geometry.size.width > geometry.size.height ? 48 : 44,dockHeight: transportHeight,captionLane: captionLane,controlsVisible: toolbar.visible)
     }
-    private func chrome(layout: NativeChromeLayout,compact: Bool) -> some View {
+    private func chrome(layout: NativeChromeLayout,landscape: Bool) -> some View {
         ZStack(alignment: .topLeading) {
-            controls(compact: compact).frame(width: layout.header.width,height: layout.header.height)
+            controls(landscape: landscape).frame(width: layout.header.width,height: layout.header.height)
                 .position(x: layout.header.midX,y: layout.header.midY)
-            NativeTransportBar(model: model,playing: playing,width: layout.dock.width,compact: compact,onInteraction: { toolbar.reveal() },onScrubbing: {
+            NativeTransportBar(model: model,playing: playing,width: layout.dock.width,landscape: landscape,onInteraction: { toolbar.reveal() },onScrubbing: {
                 scrubbing = $0; updateToolbar()
             }).background(GeometryReader { proxy in
                 Color.clear.preference(key: PlaybackControlsFrameKey.self,value: proxy.frame(in: .named("native.player")))
@@ -1104,26 +1105,26 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                 .position(x: layout.dock.midX,y: layout.dock.midY)
         }
     }
-    private func controls(compact: Bool) -> some View {
-        HStack(spacing: compact ? 3 : 8) {
+    private func controls(landscape: Bool) -> some View {
+        HStack(spacing: 8) {
             Button { model.onClose?() } label: { Image(systemName: "chevron.left") }
                 .accessibilityLabel("Back").accessibilityIdentifier("player.close")
             Text(model.metadata.title)
-                .font((compact ? Font.footnote : .subheadline).weight(.semibold))
+                .font((landscape ? Font.body : .subheadline).weight(.semibold))
                 .lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength: 0)
             Button { toolbar.reveal(); captions = true } label: { Image(systemName: "captions.bubble") }
                 .accessibilityLabel("Subtitles").accessibilityIdentifier("player.subtitles")
             Button { toolbar.reveal(); onTV() } label: {
                 Image("tv-connect").resizable().renderingMode(.template).scaledToFit()
-                    .frame(width: compact ? 16 : 20,height: compact ? 16 : 20)
+                    .frame(width: landscape ? 23 : 20,height: landscape ? 23 : 20)
             }
                 .accessibilityLabel("Play on TV").disabled(model.isSeeking || model.handoffInProgress)
             Button { toolbar.reveal(); options = true } label: { Image(systemName: "ellipsis") }
                 .accessibilityLabel("Playback options").accessibilityIdentifier("player.options")
-        }.buttonStyle(PlaybackIconButtonStyle(compact: compact)).foregroundStyle(.white)
+        }.buttonStyle(PlaybackIconButtonStyle(landscape: landscape)).foregroundStyle(.white)
             .padding(.horizontal,4)
-            .background { Capsule().fill(.black.opacity(0.45)).frame(height: compact ? 32 : 44) }
+            .background { Capsule().fill(.black.opacity(0.45)).frame(height: landscape ? 48 : 44) }
     }
     private func updateToolbar(playing: Bool? = nil) {
         toolbar.update(playing: playing ?? (model.player.timeControlStatus == .playing),active: appeared && scenePhase == .active,
@@ -1132,13 +1133,13 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
 }
 
 private struct PlaybackIconButtonStyle: ButtonStyle {
-    let compact: Bool
+    let landscape: Bool
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: compact ? 15 : 18,weight: .semibold))
-            .frame(width: 44,height: 44)
+            .font(.system(size: landscape ? 21 : 18,weight: .semibold))
+            .frame(width: landscape ? 48 : 44,height: landscape ? 48 : 44)
             .contentShape(Rectangle())
-            .background { Circle().fill(.white.opacity(configuration.isPressed ? 0.15 : 0)).frame(width: compact ? 32 : 44) }
+            .background { Circle().fill(.white.opacity(configuration.isPressed ? 0.15 : 0)).frame(width: landscape ? 48 : 44) }
     }
 }
 struct SubtitleSettings: View {

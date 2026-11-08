@@ -191,26 +191,26 @@ final class QAAcceptanceTests: XCTestCase {
         XCTAssertTrue(image.insetBy(dx: -1,dy: -1).contains(text),"Captions must remain inside the actual displayed video, including a pillarboxed source")
         XCTAssertLessThan(text.width,image.width - 8,"The caption element must fit text instead of becoming a full-width subtitle strip")
         XCTAssertFalse(text.intersects(dock),"Visible playback controls must not cross a caption line")
-        XCTAssertLessThanOrEqual(image.maxY - text.maxY,max(5,image.height * 0.035),"Standard captions stay close to the lower picture edge")
         let back = element(app,"player.close").frame, subtitles = element(app,"player.subtitles").frame
         XCTAssertTrue(viewport.contains(back)); XCTAssertTrue(viewport.contains(subtitles))
         XCTAssertTrue(back.intersection(subtitles).isNull || back.intersection(subtitles).isEmpty)
         if appFrame.height > appFrame.width {
+            XCTAssertLessThanOrEqual(image.maxY - text.maxY,max(5,image.height * 0.035),"Portrait captions stay close to the lower picture edge")
             XCTAssertLessThanOrEqual(back.maxY,image.minY,"Portrait actions should use the nearby upper letterbox")
             XCTAssertLessThanOrEqual(image.minY - back.maxY,16)
             // UIKit video and SwiftUI controls report independently rounded accessibility frames.
             XCTAssertGreaterThanOrEqual(dock.minY,image.maxY - 1,"Portrait playback controls should sit directly below the image")
             XCTAssertLessThanOrEqual(dock.minY - image.maxY,16)
         } else {
-            XCTAssertGreaterThanOrEqual(dock.minX,image.minX - 1)
-            XCTAssertLessThanOrEqual(dock.maxX,image.maxX + 1,"Landscape playback controls should use image width rather than the black pillars")
-            XCTAssertLessThanOrEqual(dock.width,341,"The landscape dock must stay compact on wide video")
-            XCTAssertLessThanOrEqual(dock.height,90,"The landscape dock should leave more of the picture unobstructed")
-            XCTAssertGreaterThanOrEqual(back.minX,image.minX - 1)
-            XCTAssertLessThanOrEqual(subtitles.maxX,image.maxX + 1)
+            XCTAssertEqual(dock.midX,appFrame.midX,accuracy: 2)
+            XCTAssertGreaterThan(dock.width,appFrame.width * 0.5,"Landscape dock gives the timeline more room")
+            XCTAssertLessThanOrEqual(dock.width,601)
+            XCTAssertLessThanOrEqual(appFrame.maxY - dock.maxY,42,"Landscape dock sits near the safe bottom edge")
+            XCTAssertLessThanOrEqual(dock.height,112,"Keep the larger buttons in a shallow dock")
+            if image.intersects(dock) { XCTAssertLessThanOrEqual(text.maxY,dock.minY) }
         }
         var controlFrames: [String:CGRect] = [:]
-        for id in ["player.play-pause","player.skip.back","player.skip.forward","player.timeline"] {
+        for id in ["player.play-pause","player.skip.back","player.skip.forward","player.timeline","player.skip.90"] {
             let control = element(app,id)
             let frame = control.frame
             controlFrames[id] = frame

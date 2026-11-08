@@ -1,6 +1,6 @@
 {
-  "version": "0.1.15",
-  "build": 16,
-  "reason": "Add manual 90-second and next-episode controls, and move timed skip actions to the lower right.",
-  "simulator": "Check player controls, timed-skip placement and playback ownership."
+  "version": "0.1.16",
+  "build": 17,
+  "reason": "Add manual skips and pin the wider landscape player controls to the bottom safe edge.",
+  "simulator": "Check landscape and portrait layout, captions, timed skips and playback ownership."
 }
