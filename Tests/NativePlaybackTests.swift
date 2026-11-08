@@ -307,6 +307,21 @@ import CoreMedia
         XCTAssertEqual(geometry.region,final); XCTAssertEqual(values.count,2)
     }
 
+    func testTimedSkipUsesLowerRightInPortraitAndLandscape() {
+        for viewport in [CGRect(x: 0,y: 0,width: 402,height: 874),CGRect(x: 0,y: 0,width: 852,height: 393)] {
+            let video = viewport.width < viewport.height
+                ? CGRect(x: 0,y: 310,width: 402,height: 254)
+                : CGRect(x: 164,y: 0,width: 524,height: 393)
+            let hidden = NativeChromeLayout.fitted(video: video,viewport: viewport,safeInsets: .zero,captionLane: 52)
+            let shown = NativeChromeLayout.fitted(video: video,viewport: viewport,safeInsets: .zero,captionLane: 52,controlsVisible: true)
+            XCTAssertEqual(hidden.segment.maxX,video.maxX - 8)
+            XCTAssertEqual(hidden.segment.maxY,video.maxY - 52)
+            XCTAssertEqual(shown.segment.maxX,hidden.segment.maxX)
+            XCTAssertTrue(video.contains(shown.segment))
+            XCTAssertFalse(shown.segment.intersects(shown.dock))
+        }
+    }
+
     func testUnifiedPlayerDisablesCompetingNativeChromeAndHasNoCaptionBackdrop() throws {
         let host = NativeVideoHostController(); host.loadViewIfNeeded()
         XCTAssertFalse(host.playback.showsPlaybackControls)
@@ -403,6 +418,28 @@ import CoreMedia
         await model.play(explicit: true)
         XCTAssertEqual(seeks.last,350,"A deliberate paused timeline action must survive the fresh server resume checkpoint")
         XCTAssertEqual(http.requests.filter { $0.url?.path == "/api/playback" }.count,1)
+    }
+
+    func testManualNextUsesThePausedEpisodesGenerationWithoutCompletingIt() async throws {
+        let http = PlaybackHTTP(); http.respond = { try self.defaultResponse($0) }
+        let model = try make(http)
+        model.player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition())); model.videoReady = true
+        let next = EpisodeChoice(id: "7",label: "7",number: "7",url: URL(string: "https://miruro.cx/watch/fixture/one-piece?ep=7"))
+        var requested: EpisodeChoice?, generation: Int64?
+        model.onNextEpisode = { episode,fence in requested = episode; generation = fence }
+        model.advanceEpisode()
+        XCTAssertNil(requested)
+        model.nextEpisode = next
+        await model.play(explicit: true)
+        await model.background()
+        XCTAssertNil(model.lease)
+        model.advanceEpisode()
+        XCTAssertEqual(requested,next)
+        XCTAssertEqual(generation,2)
+        XCTAssertEqual(http.requests.filter { $0.url?.path == "/api/playback" }.count,1)
+        let progress = http.requests.filter { $0.url?.path == "/api/progress" && $0.httpMethod == "POST" }
+        XCTAssertFalse(progress.isEmpty)
+        XCTAssertTrue(try progress.allSatisfy { try object($0)["completed"] == .bool(false) })
     }
 
     func testBackgroundFencesAnInFlightCustomSeekAndPlayCannotRaceItsCompletion() async throws {

@@ -102,10 +102,12 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     @Published private(set) var isSeeking = false
     @Published private(set) var handoffInProgress = false
     @Published private(set) var activeSegment: PlaybackSegment?
+    @Published var nextEpisode: EpisodeChoice?
     @Published var nextEpisodePrompt: EpisodeChoice?
     private var segments: [PlaybackSegment]
     private(set) var finishedGeneration: Int64?
-    var resolveNextEpisode: (() -> EpisodeChoice?)?
+    var resolveNextEpisode: (([EpisodeChoice]) -> EpisodeChoice?)?
+    private var lastPlaybackGeneration: Int64?
     var onNextEpisode: ((EpisodeChoice,Int64?) -> Void)?
     private(set) var lease: PlaybackLease?
     private var mediaBridge: MediaBridge?
@@ -198,7 +200,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
                   self.player.currentItem === item, self.lease === captured, self.player.rate == 0 else { return }
             self.finishedGeneration = captured?.isValid == true ? captured?.generation : nil
             self.release(); self.refreshSegment(); self.message = "Episode finished"
-            if canContinue, captured?.isValid != false { self.nextEpisodePrompt = self.resolveNextEpisode?() }
+            if canContinue, captured?.isValid != false { self.nextEpisodePrompt = self.nextEpisode }
         } })
         notifications.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification,object: nil,queue: .main) { [weak self] _ in Task { @MainActor in await self?.background() } })
         notifications.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemTimeJumped,object: nil,queue: .main) { [weak self] note in
@@ -277,7 +279,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     }
     func play(explicit: Bool, expectedGeneration: Int64? = nil) async {
         guard !disposed, !closing, !isStarting, !isSeeking, !handoffInProgress else { return }
-        nextEpisodePrompt = nil; finishedGeneration = nil
+        nextEpisodePrompt = nil; finishedGeneration = nil; lastPlaybackGeneration = nil
         isStarting = true; startingEpoch &+= 1; let epoch = startingEpoch
         clearScrubWindow()
         defer { if epoch == startingEpoch { isStarting = false; restoring = false } }
@@ -298,6 +300,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
                 message = result.message ?? "Press Play to continue on this device"; return
             }
             lease = result.lease; localOnly = result.lease == nil
+            lastPlaybackGeneration = result.lease?.generation
             if let captured = lease {
                 invalidation = captured.$isValid.sink { [weak self, weak captured] valid in
                     guard !valid else { return }; Task { @MainActor in guard let self, self.lease === captured else { return }; self.startingEpoch &+= 1; self.startTask?.cancel(); self.isStarting = false; self.restoring = true; self.player.pause(); self.restoring = false; self.release(); self.message = "Playback continued on another device. Press Play to resume here." }
@@ -358,6 +361,10 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
               segment.contains(position,duration: duration) else { return }
         await seek(to: segment.end)
         refreshSegment()
+    }
+    func advanceEpisode() {
+        guard canSeek, let nextEpisode else { return }
+        onNextEpisode?(nextEpisode,lastPlaybackGeneration)
     }
     private func cancelControlSeek() {
         controlSeekRevision &+= 1; isSeeking = false
@@ -663,9 +670,10 @@ enum NativeCaptionLayout {
 struct NativeChromeLayout {
     let header: CGRect
     let dock: CGRect
-    static func fitted(video: CGRect,viewport: CGRect,safeInsets: UIEdgeInsets,safeViewport: CGRect? = nil,headerHeight: CGFloat = 44,dockHeight: CGFloat = 96,captionLane: CGFloat = 0) -> NativeChromeLayout {
+    let segment: CGRect
+    static func fitted(video: CGRect,viewport: CGRect,safeInsets: UIEdgeInsets,safeViewport: CGRect? = nil,headerHeight: CGFloat = 44,dockHeight: CGFloat = 96,captionLane: CGFloat = 0,controlsVisible: Bool = false) -> NativeChromeLayout {
         let safe = (safeViewport ?? viewport.inset(by: safeInsets)).intersection(viewport)
-        guard safe.width > 0, safe.height > 0 else { return NativeChromeLayout(header: .zero,dock: .zero) }
+        guard safe.width > 0, safe.height > 0 else { return NativeChromeLayout(header: .zero,dock: .zero,segment: .zero) }
         let clipped = video.intersection(safe)
         let content = clipped.isNull || clipped.isEmpty ? safe : clipped
         let gap: CGFloat = 8
@@ -680,8 +688,18 @@ struct NativeChromeLayout {
             let lifted = min(viewport.maxY,video.maxY) - captionLane - dockHeight
             if lifted >= headerY + headerHeight + gap { dockY = min(dockY,lifted) }
         }
+        let dock = CGRect(x: left,y: dockY,width: width,height: dockHeight)
+        let segmentWidth = min(144,max(0,content.width - 2 * gap))
+        let segmentRight = content.maxX - gap
+        let segmentLeft = segmentRight - segmentWidth
+        var segmentBottom = content.maxY - max(gap,captionLane)
+        if controlsVisible, segmentLeft < dock.maxX + gap, segmentRight > dock.minX - gap {
+            let captionsAboveDock = captionLane > 0 && dock.maxY > video.maxY - captionLane && dock.intersects(video)
+            segmentBottom = min(segmentBottom,dock.minY - (captionsAboveDock ? captionLane : gap))
+        }
+        let segment = CGRect(x: segmentLeft,y: max(safe.minY,segmentBottom - 44),width: segmentWidth,height: 44)
         return NativeChromeLayout(header: CGRect(x: left,y: headerY,width: width,height: headerHeight),
-                                  dock: CGRect(x: left,y: dockY,width: width,height: dockHeight))
+                                  dock: dock,segment: segment)
     }
 }
 
@@ -849,7 +867,9 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     }
     private var transport: some View {
         let sliderScale: CGFloat = compact ? 0.75 : 1
-        let sliderWidth = max(1,width - sidePadding * 2)
+        let actionWidth: CGFloat = 44
+        let actionCount: CGFloat = model.nextEpisode == nil ? 1 : 2
+        let sliderWidth = max(1,width - sidePadding * 2 - actionWidth * actionCount - 4)
         return VStack(spacing: compact ? 0 : 4) {
             HStack(spacing: compact ? 6 : 20) {
                 Button { skip(-10) } label: {
@@ -893,26 +913,46 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                 .overlay(alignment: .trailing) {
                     if model.isStarting || model.isSeeking { ProgressView().controlSize(.small).frame(width: 24,height: 44) }
                 }
-            Slider(value: Binding(get: { min(max(0,draft ?? model.position),max(1,model.duration)) },set: { value in
-                draft = value
-                // Accessibility adjustments need not start a touch drag.
-                if !editing { commit(value) }
-            }),in: 0...max(1,model.duration),onEditingChanged: { value in
-                editing = value; onScrubbing(value); onInteraction()
-                if value { draft = model.position }
-                else if let draft { commit(draft) }
-            }).tint(.white).disabled(!model.canSeek && !editing)
-                // Scale the native thumb and track together. Compensate for
-                // horizontal scaling so the rail keeps its full seek range.
-                .frame(width: sliderWidth / sliderScale)
-                .scaleEffect(sliderScale)
-                .frame(width: sliderWidth,height: compact ? 26 : nil)
-                .accessibilityLabel("Episode timeline").accessibilityIdentifier("player.timeline")
-            Text(Self.time(draft ?? model.position) + " / " + Self.time(model.duration))
-                .font((compact ? Font.system(size: 10) : .caption).monospacedDigit())
-                .lineLimit(1).minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity,alignment: .leading)
-                .accessibilityLabel("Playback position").accessibilityIdentifier("player.time")
+            HStack(spacing: 0) {
+                VStack(spacing: compact ? 0 : 4) {
+                    Slider(value: Binding(get: { min(max(0,draft ?? model.position),max(1,model.duration)) },set: { value in
+                        draft = value
+                        // Accessibility adjustments need not start a touch drag.
+                        if !editing { commit(value) }
+                    }),in: 0...max(1,model.duration),onEditingChanged: { value in
+                        editing = value; onScrubbing(value); onInteraction()
+                        if value { draft = model.position }
+                        else if let draft { commit(draft) }
+                    }).tint(.white).disabled(!model.canSeek && !editing)
+                        // Scale the native thumb and track together. Compensate for
+                        // horizontal scaling so the rail keeps its full seek range.
+                        .frame(width: sliderWidth / sliderScale)
+                        .scaleEffect(sliderScale)
+                        .frame(width: sliderWidth,height: compact ? 26 : nil)
+                        .accessibilityLabel("Episode timeline").accessibilityIdentifier("player.timeline")
+                    Text(Self.time(draft ?? model.position) + " / " + Self.time(model.duration))
+                        .font((compact ? Font.system(size: 10) : .caption).monospacedDigit())
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(maxWidth: .infinity,alignment: .leading)
+                        .accessibilityLabel("Playback position").accessibilityIdentifier("player.time")
+                }.padding(.trailing,4)
+                Button { skip(90) } label: {
+                    Text("+90s").font(.system(size: 13,weight: .semibold))
+                        .frame(width: actionWidth,height: 44).contentShape(Rectangle())
+                }
+                .accessibilityLabel("Forward 90 seconds").accessibilityIdentifier("player.skip.90")
+                .disabled(!model.canSeek)
+                if model.nextEpisode != nil {
+                    Button {
+                        onInteraction(); model.advanceEpisode()
+                    } label: {
+                        Image(systemName: "forward.end.fill").font(.system(size: 16,weight: .semibold))
+                            .frame(width: actionWidth,height: 44).contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Next episode").accessibilityIdentifier("player.next-episode")
+                    .disabled(!model.canSeek)
+                }
+            }
         }.buttonStyle(.plain).foregroundStyle(.white)
     }
     private func skip(_ delta: Double) { onInteraction(); commit(model.position + delta) }
@@ -1003,12 +1043,12 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
             if toolbar.visible, !videoGeometry.safeViewport.isEmpty {
                 chrome(layout: layout,compact: geometry.size.width > geometry.size.height).transition(.opacity)
             }
-            if let segment = model.activeSegment, !layout.header.isEmpty {
+            if let segment = model.activeSegment, !layout.segment.isEmpty {
                 Button(segment.kind.title) { Task { await model.skip(segment) } }
                     .font(.subheadline.weight(.semibold)).padding(.horizontal,14).frame(minHeight: 44)
                     .background(.black.opacity(0.75),in: Capsule()).foregroundStyle(.white)
-                    .frame(width: layout.header.width,alignment: .trailing)
-                    .position(x: layout.header.midX,y: layout.header.maxY + 27)
+                    .frame(width: layout.segment.width,alignment: .trailing)
+                    .position(x: layout.segment.midX,y: layout.segment.midY)
                     .accessibilityIdentifier("player.skip." + segment.kind.rawValue)
             }
             if model.message != "Playing" {
@@ -1050,7 +1090,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
         return NativeChromeLayout.fitted(video: videoGeometry.region,viewport: CGRect(origin: .zero,size: geometry.size),
                                          safeInsets: UIEdgeInsets(top: insets.top,left: insets.leading,bottom: insets.bottom,right: insets.trailing),
                                          safeViewport: videoGeometry.safeViewport.isEmpty ? nil : videoGeometry.safeViewport,
-                                         dockHeight: transportHeight,captionLane: captionLane)
+                                         dockHeight: transportHeight,captionLane: captionLane,controlsVisible: toolbar.visible)
     }
     private func chrome(layout: NativeChromeLayout,compact: Bool) -> some View {
         ZStack(alignment: .topLeading) {

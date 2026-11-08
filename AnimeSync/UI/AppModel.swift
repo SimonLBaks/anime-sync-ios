@@ -103,6 +103,10 @@ struct TakeoverRequest: Identifiable {
         provider.$subtitles.sink { [weak self] sources in
             self?.forwardNativeSubtitles(sources)
         }.store(in: &subscriptions)
+        provider.$episodes.sink { [weak self] episodes in
+            guard let player = self?.player else { return }
+            player.nextEpisode = player.resolveNextEpisode?(episodes)
+        }.store(in: &subscriptions)
         provider.$sources.sink { [weak self] sources in
             guard let self, let player = self.player, let context = self.nativeSubtitleContext,
                   self.active, context.navigation == self.resolvingEpoch, context.account == self.sync.accountGeneration,
@@ -293,15 +297,16 @@ struct TakeoverRequest: Identifiable {
         pendingPlay = false; pendingNextIdentity = nil; message = nil; clearBrowser()
         let identity = fixture ? AnimeMetadata(animeID: "",episode: "",title: metadata.title,watchURL: metadata.watchURL) : metadata
         let model = NativePlaybackModel(metadata: identity,source: source,subtitles: provider.subtitles,sync: sync,fixture: fixture,position: pendingResume?.position,generation: pendingResume?.generation ?? pendingSourceGeneration)
-        model.resolveNextEpisode = { [weak self,weak model] in
+        model.nextEpisode = EpisodeChoice.next(in: provider.episodes,after: metadata)
+        model.resolveNextEpisode = { [weak self,weak model] episodes in
             guard let self, let model, self.player === model, self.provider.metadata == metadata else { return nil }
-            return EpisodeChoice.next(in: self.provider.episodes,after: metadata)
+            return EpisodeChoice.next(in: episodes,after: metadata)
         }
         model.onNextEpisode = { [weak self,weak model] episode,generation in
             Task { @MainActor in
                 guard let self, let model, self.player === model, self.active,
                       let url = episode.url, let number = Double(episode.number),
-                      episode == model.resolveNextEpisode?(), !self.busy else { return }
+                      episode == model.resolveNextEpisode?(self.provider.episodes), !self.busy else { return }
                 self.busy = true; defer { self.busy = false }
                 let account = self.sync.accountGeneration, epoch = self.resolvingEpoch
                 await model.close()

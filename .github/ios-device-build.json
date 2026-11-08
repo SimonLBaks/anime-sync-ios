@@ -1,6 +1,6 @@
 {
-  "version": "0.1.14",
-  "build": 15,
-  "reason": "Anchor standard dialogue closer to the actual video edge.",
-  "simulator": "Verify the lower edge placement and matching subtitle controls."
+  "version": "0.1.15",
+  "build": 16,
+  "reason": "Add manual 90-second and next-episode controls, and move timed skip actions to the lower right.",
+  "simulator": "Check player controls, timed-skip placement and playback ownership."
 }
