@@ -191,6 +191,10 @@ final class QAAcceptanceTests: XCTestCase {
         XCTAssertTrue(image.insetBy(dx: -1,dy: -1).contains(text),"Captions must remain inside the actual displayed video, including a pillarboxed source")
         XCTAssertLessThan(text.width,image.width - 8,"The caption element must fit text instead of becoming a full-width subtitle strip")
         XCTAssertFalse(text.intersects(dock),"Visible playback controls must not cross a caption line")
+        let shortcut = element(app,"player.skip.90")
+        XCTAssertTrue(shortcut.isHittable)
+        XCTAssertEqual(shortcut.frame.maxY,dock.minY,accuracy: 2,"The shortcut row sits flush above the dock")
+        XCTAssertFalse(text.intersects(shortcut.frame))
         let back = element(app,"player.close").frame, subtitles = element(app,"player.subtitles").frame
         XCTAssertTrue(viewport.contains(back)); XCTAssertTrue(viewport.contains(subtitles))
         XCTAssertTrue(back.intersection(subtitles).isNull || back.intersection(subtitles).isEmpty)
@@ -200,17 +204,17 @@ final class QAAcceptanceTests: XCTestCase {
             XCTAssertLessThanOrEqual(image.minY - back.maxY,16)
             // UIKit video and SwiftUI controls report independently rounded accessibility frames.
             XCTAssertGreaterThanOrEqual(dock.minY,image.maxY - 1,"Portrait playback controls should sit directly below the image")
-            XCTAssertLessThanOrEqual(dock.minY - image.maxY,16)
+            XCTAssertLessThanOrEqual(shortcut.frame.minY - image.maxY,16)
         } else {
             XCTAssertEqual(dock.midX,appFrame.midX,accuracy: 2)
             XCTAssertGreaterThan(dock.width,appFrame.width * 0.5,"Landscape dock gives the timeline more room")
             XCTAssertLessThanOrEqual(dock.width,601)
             XCTAssertLessThanOrEqual(appFrame.maxY - dock.maxY,42,"Landscape dock sits near the safe bottom edge")
             XCTAssertLessThanOrEqual(dock.height,112,"Keep the larger buttons in a shallow dock")
-            if image.intersects(dock) { XCTAssertLessThanOrEqual(text.maxY,dock.minY) }
+            if image.intersects(dock) { XCTAssertLessThanOrEqual(text.maxY,shortcut.frame.minY) }
         }
         var controlFrames: [String:CGRect] = [:]
-        for id in ["player.play-pause","player.skip.back","player.skip.forward","player.timeline","player.skip.90"] {
+        for id in ["player.play-pause","player.skip.back","player.skip.forward","player.timeline"] {
             let control = element(app,id)
             let frame = control.frame
             controlFrames[id] = frame
@@ -228,7 +232,9 @@ final class QAAcceptanceTests: XCTestCase {
         XCTAssertEqual(previous.midY,play.midY,accuracy: 1); XCTAssertEqual(next.midY,play.midY,accuracy: 1)
         let timeline = controlFrames["player.timeline"]!, timer = element(app,"player.time").frame
         XCTAssertGreaterThan(timer.width,0); XCTAssertTrue(dock.insetBy(dx: -1,dy: -1).contains(timer))
-        XCTAssertGreaterThanOrEqual(timer.minY,timeline.maxY - 1,"Time belongs below the actual slider")
+        XCTAssertLessThanOrEqual(timer.maxY,timeline.minY + 1,"Combined time belongs above the actual slider")
+        XCTAssertLessThanOrEqual(abs(timer.midY - play.midY),10)
+        XCTAssertLessThanOrEqual(timer.maxX,previous.minX,"The time readout must clear the playback buttons")
         XCTAssertEqual(timer.minX,timeline.minX,accuracy: 2,"Time must align with the slider's left edge")
     }
 

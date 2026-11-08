@@ -310,23 +310,23 @@ import CoreMedia
         XCTAssertEqual(geometry.region,final); XCTAssertEqual(values.count,2)
     }
 
-    func testTimedSkipUsesLowerRightInPortraitAndLandscape() {
+    func testShortcutsSitFlushAboveTheDockWhileTheTimedSkipCanStandAlone() {
         for viewport in [CGRect(x: 0,y: 0,width: 402,height: 874),CGRect(x: 0,y: 0,width: 852,height: 393)] {
-            let video = viewport.width < viewport.height
-                ? CGRect(x: 0,y: 310,width: 402,height: 254)
-                : CGRect(x: 164,y: 0,width: 524,height: 393)
+            let portrait = viewport.width < viewport.height
+            let video = portrait ? CGRect(x: 0,y: 310,width: 402,height: 254) : CGRect(x: 164,y: 0,width: 524,height: 393)
             let hidden = NativeChromeLayout.fitted(video: video,viewport: viewport,safeInsets: .zero,captionLane: 52)
             let shown = NativeChromeLayout.fitted(video: video,viewport: viewport,safeInsets: .zero,captionLane: 52,controlsVisible: true)
-            XCTAssertEqual(hidden.segment.maxX,video.maxX - 8)
-            XCTAssertEqual(hidden.segment.maxY,video.maxY - 52)
-            XCTAssertEqual(shown.segment.maxX,hidden.segment.maxX)
-            if viewport.width < viewport.height {
-                let noCaptions = NativeChromeLayout.fitted(video: video,viewport: viewport,safeInsets: .zero,controlsVisible: true)
-                XCTAssertEqual(shown.segment.maxX,shown.dock.maxX)
-                XCTAssertEqual(noCaptions.segment.maxY,noCaptions.dock.minY - 16)
+            XCTAssertEqual(hidden.shortcuts.maxX,video.maxX - 8)
+            XCTAssertEqual(hidden.shortcuts.maxY,video.maxY - 52)
+            XCTAssertEqual(shown.shortcuts.maxX,shown.dock.maxX)
+            XCTAssertEqual(shown.shortcuts.maxY,shown.dock.minY)
+            XCTAssertEqual(shown.shortcuts.height,44)
+            if portrait { XCTAssertEqual(shown.shortcuts.minY,video.maxY + 8) }
+            else {
+                let exclusion = shown.dock.union(shown.shortcuts)
+                let caption = NativeCaptionLayout.available(region: video,margin: 0.03,controls: exclusion,preferAboveControls: true)
+                XCTAssertLessThan(caption.maxY,shown.shortcuts.minY)
             }
-            XCTAssertTrue(video.contains(shown.segment))
-            XCTAssertFalse(shown.segment.intersects(shown.dock))
         }
     }
 

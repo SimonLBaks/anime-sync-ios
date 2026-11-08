@@ -1,6 +1,6 @@
 {
-  "version": "0.1.16",
-  "build": 17,
-  "reason": "Add manual skips and pin the wider landscape player controls to the bottom safe edge.",
-  "simulator": "Check landscape and portrait layout, captions, timed skips and playback ownership."
+  "version": "0.1.17",
+  "build": 18,
+  "reason": "Ship the approved compact player dock with a separate shortcut row and one time readout.",
+  "simulator": "Check shortcut placement, compact transport, captions, seeking and playback ownership."
 }

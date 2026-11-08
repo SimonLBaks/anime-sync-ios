@@ -670,10 +670,11 @@ enum NativeCaptionLayout {
 struct NativeChromeLayout {
     let header: CGRect
     let dock: CGRect
-    let segment: CGRect
+    let shortcuts: CGRect
+    static let shortcutHeight: CGFloat = 44
     static func fitted(video: CGRect,viewport: CGRect,safeInsets: UIEdgeInsets,safeViewport: CGRect? = nil,headerHeight: CGFloat = 44,dockHeight: CGFloat = 96,captionLane: CGFloat = 0,controlsVisible: Bool = false) -> NativeChromeLayout {
         let safe = (safeViewport ?? viewport.inset(by: safeInsets)).intersection(viewport)
-        guard safe.width > 0, safe.height > 0 else { return NativeChromeLayout(header: .zero,dock: .zero,segment: .zero) }
+        guard safe.width > 0, safe.height > 0 else { return NativeChromeLayout(header: .zero,dock: .zero,shortcuts: .zero) }
         let clipped = video.intersection(safe)
         let content = clipped.isNull || clipped.isEmpty ? safe : clipped
         let gap: CGFloat = 8
@@ -683,7 +684,9 @@ struct NativeChromeLayout {
         let center = landscape ? safe.midX : content.midX
         let left = min(safe.maxX - width,max(safe.minX,center - width / 2))
         let portraitTop = content.minY - safe.minY >= headerHeight + gap ? content.minY - headerHeight - gap : content.minY + gap
-        let portraitDockY = safe.maxY - content.maxY >= dockHeight + gap ? content.maxY + gap : content.maxY - dockHeight - gap
+        let shortcutSpace = controlsVisible ? shortcutHeight : 0
+        let portraitDockY = safe.maxY - content.maxY >= dockHeight + gap + shortcutSpace
+            ? content.maxY + gap + shortcutSpace : content.maxY - dockHeight - gap
         let top = landscape ? safe.minY + gap : portraitTop
         let bottom = landscape ? safe.maxY - dockHeight - gap : portraitDockY
         let headerY = max(safe.minY,min(safe.maxY - headerHeight,top))
@@ -693,18 +696,14 @@ struct NativeChromeLayout {
             if lifted >= headerY + headerHeight + gap { dockY = min(dockY,lifted) }
         }
         let dock = CGRect(x: left,y: dockY,width: width,height: dockHeight)
-        let segmentWidth = min(144,max(0,landscape ? content.width - 2 * gap : dock.width))
-        let segmentRight = landscape ? content.maxX - gap : dock.maxX
-        let segmentLeft = segmentRight - segmentWidth
-        var segmentBottom = content.maxY - max(gap,captionLane)
-        if (!landscape || controlsVisible), segmentLeft < dock.maxX + gap, segmentRight > dock.minX - gap {
-            let captionsAboveDock = captionLane > 0 && dock.intersects(video) &&
-                (landscape || dock.maxY > video.maxY - captionLane)
-            segmentBottom = min(segmentBottom,dock.minY - (captionsAboveDock ? captionLane : gap))
-        }
-        let segment = CGRect(x: segmentLeft,y: max(safe.minY,segmentBottom - 44),width: segmentWidth,height: 44)
+        let shortcutRight = controlsVisible ? dock.maxX : content.maxX - gap
+        let shortcutWidth = controlsVisible ? dock.width : min(144,max(0,content.width - gap * 2))
+        let shortcutBottom = controlsVisible ? dock.minY : content.maxY - max(gap,captionLane)
+        let shortcuts = CGRect(x: shortcutRight - shortcutWidth,
+                               y: max(safe.minY,shortcutBottom - shortcutHeight),
+                               width: shortcutWidth,height: shortcutHeight)
         return NativeChromeLayout(header: CGRect(x: left,y: headerY,width: width,height: headerHeight),
-                                  dock: dock,segment: segment)
+                                  dock: dock,shortcuts: shortcuts)
     }
 }
 
@@ -860,26 +859,28 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     @State private var editing = false
     @State private var seekTask: Task<Void,Never>?
     @State private var pendingSeek: Double?
-    private var sidePadding: CGFloat { landscape ? 18 : 14 }
+    private var sidePadding: CGFloat { 12 }
     var body: some View {
         // Paused playback has no changing clock. Draft edits and the observed
         // seek/start model still refresh the dock after an explicit action.
         TimelineView(.animation(minimumInterval: 0.5,paused: !playing)) { _ in transport }
             .padding(.horizontal,sidePadding)
-            .padding(.vertical,8)
+            .padding(.bottom,6)
             .frame(width: width)
-            .background(.black.opacity(0.65),in: RoundedRectangle(cornerRadius: 18))
+            .background {
+                RoundedRectangle(cornerRadius: 16).fill(.black.opacity(0.65)).padding(.top,7)
+            }
             .onDisappear { seekTask?.cancel(); pendingSeek = nil; onScrubbing(false) }
     }
     private var transport: some View {
-        let actionWidth: CGFloat = landscape ? 48 : 44
-        let actionCount: CGFloat = model.nextEpisode == nil ? 1 : 2
-        let sliderWidth = max(1,width - sidePadding * 2 - actionWidth * actionCount - 4)
-        return VStack(spacing: 4) {
-            HStack(spacing: landscape ? 24 : 20) {
+        let spacing: CGFloat = width < 400 ? 2 : 8
+        let timeWidth = max(1,(width - 2 * sidePadding - 3 * 44 - 2 * spacing) / 2 - 2)
+        return VStack(spacing: 0) {
+            HStack(spacing: spacing) {
                 Button { skip(-10) } label: {
                     Image(systemName: "gobackward.10")
                         .font(.system(size: landscape ? 21 : 18))
+                        .offset(y: 6)
                         .frame(width: 44,height: 44)
                         .contentShape(Rectangle())
                 }
@@ -892,6 +893,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                 } label: {
                     Image(systemName: playing ? "pause.fill" : "play.fill")
                         .font(landscape ? .system(size: 25,weight: .semibold) : .title2)
+                        .offset(y: 6)
                         .frame(width: 44,height: 44)
                         .contentShape(Rectangle())
                 }
@@ -909,51 +911,35 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                 Button { skip(10) } label: {
                     Image(systemName: "goforward.10")
                         .font(.system(size: landscape ? 21 : 18))
+                        .offset(y: 6)
                         .frame(width: 44,height: 44)
                         .contentShape(Rectangle())
                 }
                     .accessibilityLabel("Forward ten seconds").accessibilityIdentifier("player.skip.forward")
                     .disabled(!model.canSeek)
             }.frame(maxWidth: .infinity)
+                .overlay(alignment: .leading) {
+                    Text(Self.time(draft ?? model.position) + "/" + Self.time(model.duration))
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.78))
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(width: timeWidth,alignment: .leading)
+                        .offset(y: 6).allowsHitTesting(false)
+                        .accessibilityLabel("Playback position").accessibilityIdentifier("player.time")
+                }
                 .overlay(alignment: .trailing) {
                     if model.isStarting || model.isSeeking { ProgressView().controlSize(.small).frame(width: 24,height: 44) }
                 }
-            HStack(spacing: 0) {
-                VStack(spacing: 4) {
-                    Slider(value: Binding(get: { min(max(0,draft ?? model.position),max(1,model.duration)) },set: { value in
-                        draft = value
-                        // Accessibility adjustments need not start a touch drag.
-                        if !editing { commit(value) }
-                    }),in: 0...max(1,model.duration),onEditingChanged: { value in
-                        editing = value; onScrubbing(value); onInteraction()
-                        if value { draft = model.position }
-                        else if let draft { commit(draft) }
-                    }).tint(.white).disabled(!model.canSeek && !editing)
-                        .frame(width: sliderWidth)
-                        .accessibilityLabel("Episode timeline").accessibilityIdentifier("player.timeline")
-                    Text(Self.time(draft ?? model.position) + " / " + Self.time(model.duration))
-                        .font((landscape ? Font.system(size: 13) : .caption).monospacedDigit())
-                        .lineLimit(1).minimumScaleFactor(0.7)
-                        .frame(maxWidth: .infinity,alignment: .leading)
-                        .accessibilityLabel("Playback position").accessibilityIdentifier("player.time")
-                }.padding(.trailing,4)
-                Button { skip(90) } label: {
-                    Text("+90s").font(.system(size: landscape ? 15 : 13,weight: .semibold))
-                        .frame(width: actionWidth,height: 44).contentShape(Rectangle())
-                }
-                .accessibilityLabel("Forward 90 seconds").accessibilityIdentifier("player.skip.90")
-                .disabled(!model.canSeek)
-                if model.nextEpisode != nil {
-                    Button {
-                        onInteraction(); model.advanceEpisode()
-                    } label: {
-                        Image(systemName: "forward.end.fill").font(.system(size: landscape ? 20 : 16,weight: .semibold))
-                            .frame(width: actionWidth,height: 44).contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("Next episode").accessibilityIdentifier("player.next-episode")
-                    .disabled(!model.canSeek)
-                }
-            }
+            Slider(value: Binding(get: { min(max(0,draft ?? model.position),max(1,model.duration)) },set: { value in
+                draft = value
+                if !editing { commit(value) }
+            }),in: 0...max(1,model.duration),onEditingChanged: { value in
+                editing = value; onScrubbing(value); onInteraction()
+                if value { draft = model.position }
+                else if let draft { commit(draft) }
+            }).tint(.white).disabled(!model.canSeek && !editing)
+                .frame(height: 24)
+                .accessibilityLabel("Episode timeline").accessibilityIdentifier("player.timeline")
         }.buttonStyle(.plain).foregroundStyle(.white)
     }
     private func skip(_ delta: Double) { onInteraction(); commit(model.position + delta) }
@@ -987,7 +973,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     @State private var appeared = false
     @State private var scrubbing = false
     @State private var playing = false
-    @State private var transportHeight: CGFloat = 96
+    @State private var transportHeight: CGFloat = 74
     #if DEBUG
     @State private var qaPauseFrame: CGRect = .zero
     #endif
@@ -1039,18 +1025,13 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                 #else
                 toolbar.toggleFromVideoTap()
                 #endif
-            },controlsFrame: toolbar.visible ? layout.dock : nil,
+            },controlsFrame: toolbar.visible ? layout.dock.union(layout.shortcuts) : nil,
                                    headerFrame: toolbar.visible ? layout.header : nil,geometry: videoGeometry)
             if toolbar.visible, !videoGeometry.safeViewport.isEmpty {
                 chrome(layout: layout,landscape: geometry.size.width > geometry.size.height).transition(.opacity)
             }
-            if let segment = model.activeSegment, !layout.segment.isEmpty {
-                Button(segment.kind.title) { Task { await model.skip(segment) } }
-                    .font(.subheadline.weight(.semibold)).padding(.horizontal,14).frame(minHeight: 44)
-                    .background(.black.opacity(0.75),in: Capsule()).foregroundStyle(.white)
-                    .frame(width: layout.segment.width,alignment: .trailing)
-                    .position(x: layout.segment.midX,y: layout.segment.midY)
-                    .accessibilityIdentifier("player.skip." + segment.kind.rawValue)
+            if (toolbar.visible || model.activeSegment != nil), !layout.shortcuts.isEmpty {
+                shortcuts(in: layout.shortcuts)
             }
             if model.message != "Playing" {
                 VStack { Spacer(); Text(model.message).font(.footnote).multilineTextAlignment(.center)
@@ -1105,6 +1086,31 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                 .position(x: layout.dock.midX,y: layout.dock.midY)
         }
     }
+    private func shortcuts(in frame: CGRect) -> some View {
+        HStack(spacing: 5) {
+            if toolbar.visible {
+                Button("+90s") {
+                    toolbar.reveal()
+                    Task { await model.seek(to: model.position + 90) }
+                }.accessibilityLabel("Forward 90 seconds").accessibilityIdentifier("player.skip.90")
+                    .disabled(!model.canSeek)
+                if model.nextEpisode != nil {
+                    Button {
+                        toolbar.reveal(); model.advanceEpisode()
+                    } label: {
+                        Label("Next episode",systemImage: "forward.end.fill")
+                    }.accessibilityIdentifier("player.next-episode").disabled(!model.canSeek)
+                }
+            }
+            if let segment = model.activeSegment {
+                Button(segment.kind.title) { Task { await model.skip(segment) } }
+                    .accessibilityIdentifier("player.skip." + segment.kind.rawValue)
+            }
+        }.buttonStyle(PlaybackShortcutStyle())
+            .frame(width: frame.width,alignment: .trailing)
+            .position(x: frame.midX,y: frame.midY)
+    }
+
     private func controls(landscape: Bool) -> some View {
         HStack(spacing: 8) {
             Button { model.onClose?() } label: { Image(systemName: "chevron.left") }
@@ -1129,6 +1135,21 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     private func updateToolbar(playing: Bool? = nil) {
         toolbar.update(playing: playing ?? (model.player.timeControlStatus == .playing),active: appeared && scenePhase == .active,
                        presenting: captions || options || tvPanelPresented || scrubbing || model.isSeeking || model.isStarting,voiceOver: voiceOver)
+    }
+}
+
+private struct PlaybackShortcutStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12,weight: .semibold))
+            .lineLimit(1).minimumScaleFactor(0.8)
+            .foregroundStyle(.white.opacity(enabled ? 1 : 0.45))
+            .padding(.horizontal,10)
+            .frame(minWidth: 44,minHeight: NativeChromeLayout.shortcutHeight)
+            .background(.black.opacity(configuration.isPressed ? 0.95 : 0.78),in: Capsule())
+            .overlay { Capsule().strokeBorder(.white.opacity(0.18)) }
+            .contentShape(Capsule())
     }
 }
 
