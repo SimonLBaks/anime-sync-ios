@@ -1,6 +1,5 @@
 {
-  "version": "0.1.18",
-  "build": 19,
-  "reason": "Package the matched player menus with version 0.1.18 from the Xcode settings.",
-  "simulator": "Verify the native player and updated caption geometry."
+  "version": "0.1.19",
+  "build": 20,
+  "reason": "Show the nearest subtitle size preset for saved legacy sizes."
 }

@@ -1266,8 +1266,11 @@ struct SubtitleSettings: View {
                 }
                 Section("Appearance") {
                     let sizes: [(String,Double)] = [("Small",17),("Medium",22),("Large",27),("Extra large",32)]
+                    // Older builds let people adjust the size in smaller steps.
+                    let savedSize = model.captionSize.isFinite ? model.captionSize : 22
+                    let selected = sizes.indices.min { abs(sizes[$0].1 - savedSize) < abs(sizes[$1].1 - savedSize) }
                     ForEach(sizes.indices,id: \.self) { index in
-                        choice(sizes[index].0,selected: abs(model.captionSize - sizes[index].1) < 0.5) { model.captionSize = sizes[index].1 }
+                        choice(sizes[index].0,selected: index == selected) { model.captionSize = sizes[index].1 }
                             .accessibilityIdentifier(index == 2 ? "player.subtitle.larger" : "player.subtitle.size.\(index)")
                     }
                     Button("Raise subtitles") { model.captionMargin = NativeCaptionLayout.margin(model.captionMargin + NativeCaptionLayout.step) }.accessibilityIdentifier("player.subtitle.raise")
