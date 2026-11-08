@@ -1,6 +1,6 @@
 {
   "version": "0.1.18",
   "build": 19,
-  "reason": "Match playback options and subtitle navigation across devices.",
+  "reason": "Package the matched player menus with version 0.1.18 from the Xcode settings.",
   "simulator": "Verify the native player and updated caption geometry."
 }
