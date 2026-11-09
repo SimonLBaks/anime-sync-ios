@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 LIVE = 'testLiveMiruroCatalogueHeroAndSearchExtraction'
+LIBRARY_RESUME_CLASS = 'AppModelTests'
 FEATURES = [
     'testNativeLibraryFiltersSearchAndReturn',
     'testPaneLabelsLogoOutsideIdleAndLandscapeReachability',
@@ -15,13 +16,15 @@ FEATURES = [
 
 
 def scope(root, focus=''):
-    if focus not in ('', 'full', 'features', 'fixtures'):
+    if focus not in ('', 'full', 'features', 'fixtures', 'library-resume'):
         raise ValueError('Unknown simulator test scope: ' + focus)
     all_ui = re.findall(r'func (test\w+)\(', (root / 'Tests/QAAcceptanceTests.swift').read_text())
     unit = [name for p in sorted((root / 'Tests').glob('*.swift')) if p.name != 'QAAcceptanceTests.swift'
             for name in re.findall(r'func (test\w+)\(', p.read_text())]
     if not unit or not all_ui or LIVE not in all_ui:
         raise ValueError('Expected app units, UI acceptance and separate live-provider case')
+    if focus == 'library-resume':
+        return library_resume_scope(root, all_ui)
     selected = FEATURES if focus == 'features' else [name for name in all_ui if focus != 'fixtures' or name != LIVE]
     if not set(selected).issubset(all_ui) or not selected:
         raise ValueError('Required UI case is missing from the source')
@@ -30,6 +33,14 @@ def scope(root, focus=''):
               'This case is not counted as passed by the fixture gate.') if focus == 'fixtures' else 'Explicit focused feature selection'
     return dict(focus=focus or 'full', unitMethods=unit, selectedUIMethods=selected,
                 excludedUIMethods=[dict(method=name, reason=reason) for name in excluded])
+
+
+def library_resume_scope(root, all_ui):
+    methods = re.findall(r'func (test\w+)\(', (root / 'Tests' / (LIBRARY_RESUME_CLASS + '.swift')).read_text())
+    if not methods:
+        raise ValueError('Expected app model regressions in the library resume scope')
+    return dict(focus='library-resume', unitMethods=methods, selectedUIMethods=[],
+                excludedUIMethods=[dict(method=name, reason='Focused library resume checks') for name in all_ui])
 
 
 def main():
@@ -41,8 +52,11 @@ def main():
     selected = scope(root, args.focus)
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / 'test-scope.json').write_text(json.dumps(selected, indent=2) + '\n')
-    targets = ['-only-testing:AnimeSyncTests'] + [
-        '-only-testing:AnimeSyncUITests/QAAcceptanceTests/' + name for name in selected['selectedUIMethods']]
+    if selected['focus'] == 'library-resume':
+        targets = [f'-only-testing:AnimeSyncTests/{LIBRARY_RESUME_CLASS}']
+    else:
+        targets = ['-only-testing:AnimeSyncTests'] + [
+            '-only-testing:AnimeSyncUITests/QAAcceptanceTests/' + name for name in selected['selectedUIMethods']]
     (args.output / 'test-selection.txt').write_text('\n'.join(targets) + '\n')
     print(json.dumps({'scope': selected['focus'], 'units': len(selected['unitMethods']),
                       'ui': len(selected['selectedUIMethods']), 'excludedUI': selected['excludedUIMethods']}))

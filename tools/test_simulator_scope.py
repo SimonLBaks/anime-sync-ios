@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,3 +27,12 @@ class SimulatorScopeTests(unittest.TestCase):
         self.assertEqual(module.scope(ROOT, 'features')['selectedUIMethods'], module.FEATURES)
         with self.assertRaises(ValueError):
             module.scope(ROOT, 'typo')
+
+    def test_library_resume_selects_only_app_model_methods(self):
+        focused = module.scope(ROOT, 'library-resume')
+        self.assertIn('testCompletedLibraryCheckpointOpensAdvertisedNumericNextEpisode', focused['unitMethods'])
+        self.assertIn('testContinueDoesNotOpenOldEpisodeWhenAnotherDeviceChangesTheSeriesHead', focused['unitMethods'])
+        source = (ROOT / 'Tests/AppModelTests.swift').read_text()
+        self.assertEqual(focused['unitMethods'], re.findall(r'func (test\w+)\(', source))
+        self.assertFalse(focused['selectedUIMethods'])
+        self.assertTrue(focused['excludedUIMethods'])

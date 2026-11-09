@@ -155,7 +155,9 @@ import Foundation
         var row = try XCTUnwrap(history()["progress"]?.array?.first?.object)
         row["completed"] = .bool(true)
         let completed = row
-        let old = try XCTUnwrap(history("6")["progress"]?.array?.first)
+        var older = try XCTUnwrap(history("6")["progress"]?.array?.first?.object)
+        older["updated_at"] = .string("2026-11-06T15:00:00Z")
+        let old: JSONValue = .object(older)
         http.respond = { request in
             if self.isHead(request) {
                 XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url),resolvingAgainstBaseURL: false)?
