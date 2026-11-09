@@ -1,5 +1,5 @@
 {
-  "version": "0.1.20",
-  "build": 21,
-  "reason": "Move play, pause, and ten-second controls to the center of the video."
+  "version": "0.1.21",
+  "build": 22,
+  "reason": "Refresh Continue Watching while Home is visible and retry queued playback saves."
 }

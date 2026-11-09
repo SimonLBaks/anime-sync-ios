@@ -36,9 +36,17 @@ struct AppRoot: View {
         .overlay(alignment: .bottom) {
             AppNotice(model: model)
         }
+        .task(id: showingContinueWatching) {
+            guard showingContinueWatching else { return }
+            await model.sync.pollContinueWatching()
+        }
         .onChange(of: model.provider.sources) { _,_ in model.launchIfReady() }
         .onChange(of: model.provider.metadata) { _,_ in model.launchIfReady() }
         .onChange(of: scenePhase) { _,phase in Task { if phase == .active { await model.foreground() } else if phase == .background { await model.background() } } }
+    }
+    private var showingContinueWatching: Bool {
+        scenePhase == .active && model.route == .home && model.sync.isSignedIn &&
+            model.player == nil && !model.signingIn && !model.tvPanel && !model.pairingSheet
     }
     private func scene(available: CGSize) -> some View {
         ZStack(alignment: .topLeading) {

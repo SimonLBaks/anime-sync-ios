@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import Combine
 @testable import AnimeSync
 
 @MainActor private final class MemorySecrets: CoreSecrets {
@@ -177,6 +178,58 @@ private final class FixturePreferences {
         XCTAssertEqual(fresh?.episode, "8"); XCTAssertEqual(fresh?.currentTime, 900); XCTAssertEqual(fresh?.resolverURL.fragment, "anime-sync-id=21&anime-sync-ep=8"); XCTAssertFalse(fresh?.resolverURL.absoluteString.contains("anime-sync-t") ?? true)
         XCTAssertEqual(service.status, "Synced with Anime Sync")
     }
+    func testVisibleHomePollRetriesOwnedProgressAndSeesAnotherDeviceUpdate() async throws {
+        let writerPreferences = FixturePreferences(), writerHTTP = FakeHTTP()
+        let (writer, _) = try sync(writerHTTP, writerPreferences)
+        writerHTTP.respond = { request in try self.reply(self.head(generation: request.httpMethod == "GET" ? 1 : 2)) }
+        let start = try await writer.begin(metadata: metadata, explicit: true)
+        let lease = try XCTUnwrap(start.lease)
+        writerHTTP.respond = { _ in throw URLError(.notConnectedToInternet) }
+        await writer.progress(metadata: metadata, lease: lease, position: 220, duration: 1000)
+        let pending = "animesync.pending:" + lease.id
+        XCTAssertNotNil(writerPreferences.defaults.data(forKey: pending))
+
+        var committed: JSONObject?
+        writerHTTP.respond = { request in
+            if request.httpMethod == "POST" {
+                var row = try self.body(request)
+                XCTAssertEqual(row["playback_generation"]?.integer, 2)
+                XCTAssertEqual(row["playback_sequence"]?.integer, 1)
+                row["updated_at"] = .string("2026-11-06T16:00:00Z"); committed = row
+                return try self.reply(["ok": .bool(true)])
+            }
+            return try self.reply(["progress": .array([.object(XCTUnwrap(committed))])])
+        }
+        let flushed = await writer.refreshHistory(retryPending: true)
+        XCTAssertTrue(flushed)
+        XCTAssertNil(writerPreferences.defaults.data(forKey: pending))
+        XCTAssertEqual(writer.history.continuing.first?.currentTime, 220)
+
+        let readerPreferences = FixturePreferences(), readerHTTP = FakeHTTP()
+        let (reader, _) = try sync(readerHTTP, readerPreferences)
+        let first = try XCTUnwrap(committed)
+        var next = first
+        next["episode"] = .string("8"); next["current_time"] = .number(125)
+        next["updated_at"] = .string("2026-11-06T16:00:01Z")
+        readerHTTP.respond = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            let row = readerHTTP.requests.count == 1 ? first : next
+            return try self.reply(["progress": .array([.object(row)])])
+        }
+        let updated = expectation(description: "Next poll displays the episode saved by the other device")
+        let observed = reader.$history.dropFirst().sink { snapshot in
+            if snapshot.continuing.first?.episode == "8" { updated.fulfill() }
+        }
+        let polling = Task { await reader.pollContinueWatching() }
+        await fulfillment(of: [updated], timeout: 3)
+        polling.cancel()
+        await polling.value
+        observed.cancel()
+        XCTAssertEqual(readerHTTP.requests.count, 2)
+        XCTAssertEqual(reader.history.continuing.first?.episode, "8")
+        XCTAssertEqual(reader.history.continuing.first?.currentTime, 125)
+    }
+
     func testCanceledHistoryRefreshPreservesHistoryAndStatus() async throws {
         let preferences = FixturePreferences(), http = FakeHTTP(); let (service, _) = try sync(http, preferences)
         http.respond = { _ in try self.reply(["progress": .array([

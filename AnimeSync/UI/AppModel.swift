@@ -124,7 +124,7 @@ struct TakeoverRequest: Identifiable {
     }
     func start() async {
         provider.browse(section: "Home"); dashboard.load(origin: sync.baseURL,accountGeneration: sync.accountGeneration)
-        tv.startPolling(); await sync.flushPending(); await sync.refreshHistory()
+        tv.startPolling()
     }
     func touchDrawer() {
         idle?.cancel(); guard drawer else { return }
@@ -148,7 +148,7 @@ struct TakeoverRequest: Identifiable {
         else if next.section == "Settings" || next.section == "History" { provider.stop() }
         else if let url = next.url { provider.browse(section: next.section,url: url) }
         else { provider.browse(section: next.section) }
-        if next.section == "Home" || next.section == "History" { Task { await sync.refreshHistory() } }
+        if next.section == "History" { Task { await sync.refreshHistory(retryPending: true) } }
     }
     func back() async {
         if drawer { drawer = false; return }
@@ -514,7 +514,11 @@ struct TakeoverRequest: Identifiable {
         if preserveCaptions, let context = captionContext { nativeSubtitleContext = (context.player,resolvingEpoch,context.account,context.source) }
         if let player { await player.background() }
     }
-    func foreground() async { active = true; tv.startPolling(); await sync.flushPending(); await sync.refreshHistory(); if active, let player { forwardNativeSubtitles(provider.subtitles); await player.foreground() } }
+    func foreground() async {
+        active = true; tv.startPolling()
+        if route != .home || player != nil { await sync.refreshHistory(retryPending: true) }
+        if active, let player { forwardNativeSubtitles(provider.subtitles); await player.foreground() }
+    }
 }
 
 @MainActor final class AppBootstrap: ObservableObject {

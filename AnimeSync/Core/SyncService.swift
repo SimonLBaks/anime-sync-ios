@@ -107,20 +107,34 @@ import Combine
         guard isSignedIn, let key = EpisodeProgressKey(site: site,animeID: animeID,episode: episode) else { return nil }
         return episodeFractions[key]
     }
-    @discardableResult func refreshHistory() async -> Bool {
-        guard !token.isEmpty else { history = .empty; watchedEpisodes = []; episodeFractions = [:]; return false }; let epoch = accountEpoch
+    @discardableResult func refreshHistory(retryPending: Bool = false) async -> Bool {
+        guard !token.isEmpty else { return false }; let epoch = accountEpoch
         do { let result = try await queue.run { [self] () async throws -> (HomeHistorySnapshot,Set<EpisodeProgressKey>,[EpisodeProgressKey: Double]) in
+            try sameAccount(epoch)
+            if retryPending { await flushPendingLocked() }
             let response = try await authorized("/api/progress", epoch: epoch)
             guard let rows = response["progress"]?.array else { throw CoreError.invalidResponse }
             let entries = rows.compactMap { $0.object.flatMap(HistoryEntry.init(json:)) }
             return (HomeHistory.select(entries),WatchedEpisodeIndex.select(entries),HomeHistory.episodeFractions(entries))
-        }; try sameAccount(epoch); history = result.0; watchedEpisodes = result.1; episodeFractions = result.2
+        }; try Task.checkCancellation(); try sameAccount(epoch)
+            if history != result.0 { history = result.0 }
+            if watchedEpisodes != result.1 { watchedEpisodes = result.1 }
+            if episodeFractions != result.2 { episodeFractions = result.2 }
             if status == Self.historyRefreshFailure { status = "Synced with Anime Sync" }
             return true
         } catch CoreError.unauthorized { if epoch == accountEpoch { clearUnauthorized() } }
         catch is CancellationError { }
-        catch { if epoch == accountEpoch { status = Self.historyRefreshFailure } }
+        catch { if epoch == accountEpoch, status != Self.historyRefreshFailure { status = Self.historyRefreshFailure } }
         return false
+    }
+    func pollContinueWatching() async {
+        let clock = ContinuousClock()
+        while isSignedIn && !Task.isCancelled {
+            let started = clock.now
+            let refreshed = await refreshHistory(retryPending: true)
+            let deadline = refreshed ? started.advanced(by: .seconds(1)) : clock.now.advanced(by: .seconds(5))
+            do { try await clock.sleep(until: deadline) } catch { return }
+        }
     }
     /// Continue selection always refetches the authoritative series head before navigation.
     func freshContinue(animeID: String) async -> HistoryEntry? {
