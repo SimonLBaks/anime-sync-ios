@@ -210,7 +210,7 @@ final class QAAcceptanceTests: XCTestCase {
             XCTAssertGreaterThan(dock.width,appFrame.width * 0.5,"Landscape dock gives the timeline more room")
             XCTAssertLessThanOrEqual(dock.width,601)
             XCTAssertLessThanOrEqual(appFrame.maxY - dock.maxY,42,"Landscape dock sits near the safe bottom edge")
-            XCTAssertLessThanOrEqual(dock.height,112,"Keep the larger buttons in a shallow dock")
+            XCTAssertLessThanOrEqual(dock.height,112,"Keep the timeline dock shallow")
             if image.intersects(dock) { XCTAssertLessThanOrEqual(text.maxY,shortcut.frame.minY) }
         }
         var controlFrames: [String:CGRect] = [:]
@@ -219,22 +219,24 @@ final class QAAcceptanceTests: XCTestCase {
             let frame = control.frame
             controlFrames[id] = frame
             XCTAssertGreaterThan(frame.width,0); XCTAssertGreaterThan(frame.height,0)
-            XCTAssertTrue(dock.insetBy(dx: -1,dy: -1).contains(frame),"Transport control must stay inside the single dock: \(id)")
+
             XCTAssertTrue(control.isHittable)
         }
         let play = controlFrames["player.play-pause"]!, previous = controlFrames["player.skip.back"]!, next = controlFrames["player.skip.forward"]!
         for frame in [play, previous, next] {
             XCTAssertGreaterThanOrEqual(frame.width,43)
-            XCTAssertGreaterThanOrEqual(frame.height,43,"The visual reduction must preserve full-size transport touch targets")
+            XCTAssertGreaterThanOrEqual(frame.height,43,"Keep full-size transport touch targets")
+            XCTAssertTrue(image.insetBy(dx: -1,dy: -1).contains(frame),"The center controls belong on the picture")
+            XCTAssertFalse(frame.intersects(dock),"The touch targets must clear the timeline dock")
         }
-        XCTAssertEqual(play.midX,dock.midX,accuracy: 1,"Play/Pause must stay centered independently of timer text or loading indicators")
+        XCTAssertEqual(play.midX,image.midX,accuracy: 2)
+        XCTAssertEqual(play.midY,image.midY,accuracy: 2)
         XCTAssertEqual(play.midX - previous.midX,next.midX - play.midX,accuracy: 1)
         XCTAssertEqual(previous.midY,play.midY,accuracy: 1); XCTAssertEqual(next.midY,play.midY,accuracy: 1)
         let timeline = controlFrames["player.timeline"]!, timer = element(app,"player.time").frame
         XCTAssertGreaterThan(timer.width,0); XCTAssertTrue(dock.insetBy(dx: -1,dy: -1).contains(timer))
         XCTAssertLessThanOrEqual(timer.maxY,timeline.minY + 1,"Combined time belongs above the actual slider")
-        XCTAssertLessThanOrEqual(abs(timer.midY - play.midY),10)
-        XCTAssertLessThanOrEqual(timer.maxX,previous.minX,"The time readout must clear the playback buttons")
+        XCTAssertTrue(dock.insetBy(dx: -1,dy: -1).contains(timeline))
         XCTAssertEqual(timer.minX,timeline.minX,accuracy: 2,"Time must align with the slider's left edge")
     }
 

@@ -695,10 +695,12 @@ struct NativeChromeLayout {
     let header: CGRect
     let dock: CGRect
     let shortcuts: CGRect
+    let transportCenter: CGPoint
+    static let timelineDockHeight: CGFloat = 52
     static let shortcutHeight: CGFloat = 44
     static func fitted(video: CGRect,viewport: CGRect,safeInsets: UIEdgeInsets,safeViewport: CGRect? = nil,headerHeight: CGFloat = 44,dockHeight: CGFloat = 96,captionLane: CGFloat = 0,controlsVisible: Bool = false) -> NativeChromeLayout {
         let safe = (safeViewport ?? viewport.inset(by: safeInsets)).intersection(viewport)
-        guard safe.width > 0, safe.height > 0 else { return NativeChromeLayout(header: .zero,dock: .zero,shortcuts: .zero) }
+        guard safe.width > 0, safe.height > 0 else { return NativeChromeLayout(header: .zero,dock: .zero,shortcuts: .zero,transportCenter: .zero) }
         let clipped = video.intersection(safe)
         let content = clipped.isNull || clipped.isEmpty ? safe : clipped
         let gap: CGFloat = 8
@@ -727,7 +729,7 @@ struct NativeChromeLayout {
                                y: max(safe.minY,shortcutBottom - shortcutHeight),
                                width: shortcutWidth,height: shortcutHeight)
         return NativeChromeLayout(header: CGRect(x: left,y: headerY,width: width,height: headerHeight),
-                                  dock: dock,shortcuts: shortcuts)
+                                  dock: dock,shortcuts: shortcuts,transportCenter: CGPoint(x: content.midX,y: content.midY))
     }
 }
 
@@ -857,11 +859,6 @@ struct NativePlayerController: UIViewControllerRepresentable {
     }
 }
 
-private struct PlaybackControlsFrameKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect,nextValue: () -> CGRect) { value = nextValue() }
-}
-
 #if DEBUG
 private struct QAPauseButtonFrameKey: PreferenceKey {
     static let defaultValue: CGRect = .zero
@@ -872,10 +869,10 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
 }
 #endif
 
-@MainActor private struct NativeTransportBar: View {
+@MainActor private struct NativeTransportControls: View {
     @ObservedObject var model: NativePlaybackModel
     let playing: Bool
-    let width: CGFloat
+    let layout: NativeChromeLayout
     let landscape: Bool
     var onInteraction: () -> Void
     var onScrubbing: (Bool) -> Void
@@ -883,76 +880,69 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     @State private var editing = false
     @State private var seekTask: Task<Void,Never>?
     @State private var pendingSeek: Double?
-    private var sidePadding: CGFloat { 12 }
     var body: some View {
-        // Paused playback has no changing clock. Draft edits and the observed
-        // seek/start model still refresh the dock after an explicit action.
-        TimelineView(.animation(minimumInterval: 0.5,paused: !playing)) { _ in transport }
-            .padding(.horizontal,sidePadding)
-            .padding(.bottom,6)
-            .frame(width: width)
-            .background {
-                RoundedRectangle(cornerRadius: 16).fill(.black.opacity(0.65)).padding(.top,7)
-            }
+        ZStack(alignment: .topLeading) {
+            // Only the timeline clock needs a periodic refresh.
+            TimelineView(.animation(minimumInterval: 0.5,paused: !playing)) { _ in timeline }
+                .padding(.horizontal,12)
+                .padding(.bottom,6)
+                .frame(width: layout.dock.width,height: layout.dock.height)
+                .background(.black.opacity(0.65),in: RoundedRectangle(cornerRadius: 16))
+                .accessibilityElement(children: .contain).accessibilityIdentifier("player.transport")
+                .position(x: layout.dock.midX,y: layout.dock.midY)
+            centerControls
+                .position(x: layout.transportCenter.x,y: layout.transportCenter.y)
+        }.foregroundStyle(.white)
             .onDisappear { seekTask?.cancel(); pendingSeek = nil; onScrubbing(false) }
     }
-    private var transport: some View {
-        let spacing: CGFloat = width < 400 ? 2 : 8
-        let timeWidth = max(1,(width - 2 * sidePadding - 3 * 44 - 2 * spacing) / 2 - 2)
-        return VStack(spacing: 0) {
-            HStack(spacing: spacing) {
-                Button { skip(-10) } label: {
-                    Image(systemName: "gobackward.10")
-                        .font(.system(size: landscape ? 21 : 18))
-                        .offset(y: 6)
-                        .frame(width: 44,height: 44)
-                        .contentShape(Rectangle())
-                }
-                    .accessibilityLabel("Back ten seconds").accessibilityIdentifier("player.skip.back")
-                    .disabled(!model.canSeek)
-                Button {
-                    onInteraction()
-                    if model.player.rate > 0 { model.player.pause() }
-                    else { Task { await model.play(explicit: true) } }
-                } label: {
-                    Image(systemName: playing ? "pause.fill" : "play.fill")
-                        .font(landscape ? .system(size: 25,weight: .semibold) : .title2)
-                        .offset(y: 6)
-                        .frame(width: 44,height: 44)
-                        .contentShape(Rectangle())
-                }
-                    .accessibilityLabel(playing ? "Pause" : "Play").accessibilityIdentifier("player.play-pause")
-                    .disabled(model.isStarting || model.isSeeking || model.handoffInProgress)
-                    #if DEBUG
-                    .background {
-                        if model.fixture {
-                            GeometryReader { geometry in
-                                Color.clear.preference(key: QAPauseButtonFrameKey.self,value: geometry.frame(in: .global))
-                            }.allowsHitTesting(false)
-                        }
+
+    private var centerControls: some View {
+        let skipSize: CGFloat = landscape ? 48 : 44
+        let playSize: CGFloat = landscape ? 56 : 52
+        return HStack(spacing: landscape ? 32 : 24) {
+            Button { skip(-10) } label: {
+                Image(systemName: "gobackward.10").font(.system(size: landscape ? 24 : 22))
+            }.buttonStyle(PlaybackTransportButtonStyle(size: skipSize))
+                .accessibilityLabel("Back ten seconds").accessibilityIdentifier("player.skip.back")
+                .disabled(!model.canSeek)
+            Button {
+                onInteraction()
+                if model.player.rate > 0 { model.player.pause() }
+                else { Task { await model.play(explicit: true) } }
+            } label: {
+                Image(systemName: playing ? "pause.fill" : "play.fill")
+                    .font(.system(size: landscape ? 30 : 26,weight: .semibold))
+            }.buttonStyle(PlaybackTransportButtonStyle(size: playSize))
+                .accessibilityLabel(playing ? "Pause" : "Play").accessibilityIdentifier("player.play-pause")
+                .disabled(model.isStarting || model.isSeeking || model.handoffInProgress)
+                #if DEBUG
+                .background {
+                    if model.fixture {
+                        GeometryReader { geometry in
+                            Color.clear.preference(key: QAPauseButtonFrameKey.self,value: geometry.frame(in: .global))
+                        }.allowsHitTesting(false)
                     }
-                    #endif
-                Button { skip(10) } label: {
-                    Image(systemName: "goforward.10")
-                        .font(.system(size: landscape ? 21 : 18))
-                        .offset(y: 6)
-                        .frame(width: 44,height: 44)
-                        .contentShape(Rectangle())
                 }
-                    .accessibilityLabel("Forward ten seconds").accessibilityIdentifier("player.skip.forward")
-                    .disabled(!model.canSeek)
-            }.frame(maxWidth: .infinity)
-                .overlay(alignment: .leading) {
-                    Text(Self.time(draft ?? model.position) + "/" + Self.time(model.duration))
-                        .font(.system(size: 12).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.78))
-                        .lineLimit(1).minimumScaleFactor(0.7)
-                        .frame(width: timeWidth,alignment: .leading)
-                        .offset(y: 6).allowsHitTesting(false)
-                        .accessibilityLabel("Playback position").accessibilityIdentifier("player.time")
-                }
+                #endif
+            Button { skip(10) } label: {
+                Image(systemName: "goforward.10").font(.system(size: landscape ? 24 : 22))
+            }.buttonStyle(PlaybackTransportButtonStyle(size: skipSize))
+                .accessibilityLabel("Forward ten seconds").accessibilityIdentifier("player.skip.forward")
+                .disabled(!model.canSeek)
+        }
+    }
+
+    private var timeline: some View {
+        VStack(alignment: .leading,spacing: 0) {
+            Text(Self.time(draft ?? model.position) + "/" + Self.time(model.duration))
+                .font(.system(size: 12).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.78))
+                .lineLimit(1).minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity,alignment: .leading)
+                .frame(height: 22)
+                .accessibilityLabel("Playback position").accessibilityIdentifier("player.time")
                 .overlay(alignment: .trailing) {
-                    if model.isStarting || model.isSeeking { ProgressView().controlSize(.small).frame(width: 24,height: 44) }
+                    if model.isStarting || model.isSeeking { ProgressView().controlSize(.small) }
                 }
             Slider(value: Binding(get: { min(max(0,draft ?? model.position),max(1,model.duration)) },set: { value in
                 draft = value
@@ -964,8 +954,9 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
             }).tint(.white).disabled(!model.canSeek && !editing)
                 .frame(height: 24)
                 .accessibilityLabel("Episode timeline").accessibilityIdentifier("player.timeline")
-        }.buttonStyle(.plain).foregroundStyle(.white)
+        }
     }
+
     private func skip(_ delta: Double) { onInteraction(); commit(model.position + delta) }
     private func commit(_ target: Double) {
         guard seekTask != nil || !model.isSeeking else { draft = nil; return }
@@ -997,7 +988,6 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     @State private var appeared = false
     @State private var scrubbing = false
     @State private var playing = false
-    @State private var transportHeight: CGFloat = 74
     #if DEBUG
     @State private var qaPauseFrame: CGRect = .zero
     #endif
@@ -1074,10 +1064,7 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                 }
             }
             #endif
-        }.coordinateSpace(name: "native.player")
-            .onPreferenceChange(PlaybackControlsFrameKey.self) {
-                if $0.height > 0, abs(transportHeight - $0.height) > 0.5 { transportHeight = $0.height }
-            }
+        }
             #if DEBUG
             .onPreferenceChange(QAPauseButtonFrameKey.self) { frame in
                 if !frame.isEmpty, frame != qaPauseFrame { qaPauseFrame = frame }
@@ -1092,18 +1079,15 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
         return NativeChromeLayout.fitted(video: videoGeometry.region,viewport: CGRect(origin: .zero,size: geometry.size),
                                          safeInsets: UIEdgeInsets(top: insets.top,left: insets.leading,bottom: insets.bottom,right: insets.trailing),
                                          safeViewport: videoGeometry.safeViewport.isEmpty ? nil : videoGeometry.safeViewport,
-                                         headerHeight: geometry.size.width > geometry.size.height ? 48 : 44,dockHeight: transportHeight,captionLane: captionLane,controlsVisible: toolbar.visible)
+                                         headerHeight: geometry.size.width > geometry.size.height ? 48 : 44,dockHeight: NativeChromeLayout.timelineDockHeight,captionLane: captionLane,controlsVisible: toolbar.visible)
     }
     private func chrome(layout: NativeChromeLayout,landscape: Bool) -> some View {
         ZStack(alignment: .topLeading) {
             controls(landscape: landscape).frame(width: layout.header.width,height: layout.header.height)
                 .position(x: layout.header.midX,y: layout.header.midY)
-            NativeTransportBar(model: model,playing: playing,width: layout.dock.width,landscape: landscape,onInteraction: { toolbar.reveal() },onScrubbing: {
+            NativeTransportControls(model: model,playing: playing,layout: layout,landscape: landscape,onInteraction: { toolbar.reveal() },onScrubbing: {
                 scrubbing = $0; updateToolbar()
-            }).background(GeometryReader { proxy in
-                Color.clear.preference(key: PlaybackControlsFrameKey.self,value: proxy.frame(in: .named("native.player")))
-            }).accessibilityElement(children: .contain).accessibilityIdentifier("player.transport")
-                .position(x: layout.dock.midX,y: layout.dock.midY)
+            })
         }
     }
     private func shortcuts(in frame: CGRect) -> some View {
@@ -1155,6 +1139,19 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     private func updateToolbar(playing: Bool? = nil) {
         toolbar.update(playing: playing ?? (model.player.timeControlStatus == .playing),active: appeared && scenePhase == .active,
                        presenting: captions || options || tvPanelPresented || scrubbing || model.isSeeking || model.isStarting,voiceOver: voiceOver)
+    }
+}
+
+private struct PlaybackTransportButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    let size: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white.opacity(enabled ? 1 : 0.45))
+            .frame(width: size,height: size)
+            .background(Color(white: configuration.isPressed ? 0.38 : 0.294).opacity(0.86),in: Circle())
+            .contentShape(Circle())
     }
 }
 
