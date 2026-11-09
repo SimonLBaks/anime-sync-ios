@@ -69,6 +69,10 @@ enum HomeHistory {
         return fractions
     }
     static func select(_ source: [HistoryEntry]) -> HomeHistorySnapshot {
+        presentation(latestEntries(source))
+    }
+    /// Pick the latest checkpoint for each series before applying Home's display rules.
+    static func latestEntries(_ source: [HistoryEntry]) -> [HistoryEntry] {
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let plain = ISO8601DateFormatter()
         var rows: [(HistoryEntry, Date)] = []
@@ -84,14 +88,16 @@ enum HomeHistory {
             if left.0.animeID != right.0.animeID { return left.0.animeID < right.0.animeID }
             return left.0.episode < right.0.episode
         }
-        var seen = Set<String>(), continuing: [HistoryEntry] = [], recent: [HistoryEntry] = []
-        for (row, _) in rows {
-            guard seen.insert(row.animeID).inserted else { continue }
+        var seen = Set<String>()
+        return rows.compactMap { row, _ in
             // Deduplicate before eligibility: a bad/latest row must not resurrect an old episode.
-            guard !row.title.isEmpty, row.currentTime.isFinite, row.currentTime >= 0, row.duration.isFinite, row.duration >= 0 else { continue }
-            if recent.count < 10 { recent.append(row) }
-            if row.resumePosition > 0 && continuing.count < 24 { continuing.append(row) }
+            guard seen.insert(row.animeID).inserted, !row.title.isEmpty, row.currentTime.isFinite,
+                  row.currentTime >= 0, row.duration.isFinite, row.duration >= 0 else { return nil }
+            return row
         }
-        return HomeHistorySnapshot(continuing: continuing, recent: recent)
+    }
+    static func presentation(_ latest: [HistoryEntry]) -> HomeHistorySnapshot {
+        HomeHistorySnapshot(continuing: Array(latest.lazy.filter { $0.resumePosition > 0 }.prefix(24)),
+                            recent: Array(latest.prefix(10)))
     }
 }

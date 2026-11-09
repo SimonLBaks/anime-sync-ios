@@ -150,15 +150,30 @@ struct SyncLibraryCard: Identifiable, Equatable {
     var hasNew: Bool
     var nextURL: URL?
     var nextEpisode: String
+    var checkpointEpisode: String
     init?(json: JSONObject) {
         guard let key = json["key"]?.string, let value = json["url"]?.string,
               let url = URL(string: value), AppWebPolicy.isProvider(url), !key.isEmpty else { return nil }
         id = key; title = String((json["title"]?.string ?? "Untitled").prefix(500)); self.url = url
-        posterURL = ProviderPolicy.imageURL(json["poster"]?.string); episode = String((json["episode"]?.string ?? "").prefix(80))
+        posterURL = ProviderPolicy.imageURL(json["poster"]?.string); episode = Self.episodeText(json["episode"])
         let progressValue = json["progress"]?.double ?? 0; progress = progressValue.isFinite ? min(1, max(0, progressValue)) : 0
         continuing = json["continuing"]?.bool ?? false; hasNew = json["has_new"]?.bool ?? false
         nextURL = json["next_url"]?.string.flatMap(URL.init(string:)).flatMap { AppWebPolicy.isProvider($0) ? $0 : nil }
-        nextEpisode = String((json["next_episode"]?.string ?? "").prefix(80))
+        nextEpisode = Self.episodeText(json["next_episode"])
+        checkpointEpisode = Self.episodeText(json["checkpoint_episode"])
+    }
+    private static func episodeText(_ value: JSONValue?) -> String {
+        String((value?.string ?? value?.integer.map { String($0) } ?? "").prefix(80))
+    }
+    func nextAfter(_ checkpoint: HistoryEntry) -> String? {
+        guard checkpoint.completed,
+              let tracked = EpisodeProgressKey(site: "miruro",animeID: checkpoint.animeID,episode: checkpointEpisode),
+              let displayed = EpisodeProgressKey(site: "miruro",animeID: checkpoint.animeID,episode: episode),
+              let next = EpisodeProgressKey(site: "miruro",animeID: checkpoint.animeID,episode: nextEpisode),
+              tracked.episode == checkpoint.episode, displayed == next,
+              let nextNumber = Double(next.episode), let trackedNumber = Double(tracked.episode),
+              nextNumber > trackedNumber else { return nil }
+        return next.episode
     }
 }
 struct BrowserHandoffSnapshot {

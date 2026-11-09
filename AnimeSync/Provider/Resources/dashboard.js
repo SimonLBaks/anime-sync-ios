@@ -53,8 +53,8 @@
     const pending=state.loadInFlight||state.mutationInFlight||!Array.isArray(state.series)||!list||!list.children.length;
     if(pending){if(force||!reportedLoading){reportedLoading=true;send({type:'library-status',loading:true});}return;}
     const cards=state.series.map(s=>{const e=latestTrackedEpisode(s),next=e?.completed&&!s.is_completed?s.next_episode:null;return {
-      key:seriesKey(s),title:s.title,poster:posterUrl(s),url:seriesActionUrl(s,e),episode:next?.episode||e?.episode||'',progress:next?0:e?.progress||0,
-      next_url:s.next_episode?.watch_url||'',next_episode:s.next_episode?.episode||'',
+      key:seriesKey(s),title:s.title,poster:posterUrl(s),url:seriesActionUrl(s,e),episode:String(next?.episode??e?.episode??''),progress:next?0:e?.progress||0,
+      checkpoint_episode:String(e?.episode??''),next_url:s.next_episode?.watch_url||'',next_episode:String(s.next_episode?.episode??''),
       continuing:!!e&&!s.is_completed&&s.status!=='dropped'&&!isUpToDateSeries(s)&&!isNewEpisodeSeries(s),has_new:isNewEpisodeSeries(s)};});
     const signature=JSON.stringify(cards);
     if(force||signature!==librarySignature){librarySignature=signature;send({type:'library',cards,complete:true});}

@@ -172,9 +172,12 @@ private final class FixturePreferences {
         let preferences = FixturePreferences(), http = FakeHTTP(); let (service, _) = try sync(http, preferences)
         func progress(_ episode: String, _ position: Double) -> JSONObject { ["progress": .array([.object(["site": .string("miruro"), "anime_id": .string("21"), "episode": .string(episode), "title": .string("One Piece"), "current_time": .number(position), "duration": .number(1200), "completed": .bool(false), "updated_at": .string("2026-11-06T16:00:00Z")])])] }
         http.respond = { _ in try self.reply(progress("6", 200)) }; let refreshed = await service.refreshHistory(); XCTAssertTrue(refreshed)
-        http.respond = { _ in throw URLError(.notConnectedToInternet) }; let offline = await service.freshContinue(animeID: "21"); XCTAssertNil(offline); XCTAssertEqual(service.history.continuing.first?.episode, "6")
+        http.respond = { _ in throw URLError(.notConnectedToInternet) }
+        do { _ = try await service.freshCheckpoint(animeID: "21"); XCTFail("A cached checkpoint must not open after a failed read") }
+        catch { XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet) }
+        XCTAssertEqual(service.history.continuing.first?.episode, "6")
         XCTAssertEqual(service.status, "Could not refresh history. Check your connection.")
-        http.respond = { _ in try self.reply(progress("8", 900)) }; let fresh = await service.freshContinue(animeID: "21")
+        http.respond = { _ in try self.reply(progress("8", 900)) }; let fresh = try await service.freshCheckpoint(animeID: "21")
         XCTAssertEqual(fresh?.episode, "8"); XCTAssertEqual(fresh?.currentTime, 900); XCTAssertEqual(fresh?.resolverURL.fragment, "anime-sync-id=21&anime-sync-ep=8"); XCTAssertFalse(fresh?.resolverURL.absoluteString.contains("anime-sync-t") ?? true)
         XCTAssertEqual(service.status, "Synced with Anime Sync")
     }

@@ -108,24 +108,34 @@ import Combine
         return episodeFractions[key]
     }
     @discardableResult func refreshHistory(retryPending: Bool = false) async -> Bool {
-        guard !token.isEmpty else { return false }; let epoch = accountEpoch
-        do { let result = try await queue.run { [self] () async throws -> (HomeHistorySnapshot,Set<EpisodeProgressKey>,[EpisodeProgressKey: Double]) in
+        do { _ = try await readHistory(retryPending: retryPending); return true }
+        catch { return false }
+    }
+    private func readHistory(retryPending: Bool = false, animeID: String? = nil) async throws -> HistoryEntry? {
+        guard !token.isEmpty else { throw CoreError.unauthorized }; let epoch = accountEpoch
+        do { let result = try await queue.run { [self] () async throws -> (HomeHistorySnapshot,Set<EpisodeProgressKey>,[EpisodeProgressKey: Double],HistoryEntry?) in
             try sameAccount(epoch)
             if retryPending { await flushPendingLocked() }
             let response = try await authorized("/api/progress", epoch: epoch)
             guard let rows = response["progress"]?.array else { throw CoreError.invalidResponse }
             let entries = rows.compactMap { $0.object.flatMap(HistoryEntry.init(json:)) }
-            return (HomeHistory.select(entries),WatchedEpisodeIndex.select(entries),HomeHistory.episodeFractions(entries))
+            let latest = HomeHistory.latestEntries(entries)
+            return (HomeHistory.presentation(latest),WatchedEpisodeIndex.select(entries),HomeHistory.episodeFractions(entries),
+                    animeID.flatMap { id in latest.first { $0.animeID == id } })
         }; try Task.checkCancellation(); try sameAccount(epoch)
             if history != result.0 { history = result.0 }
             if watchedEpisodes != result.1 { watchedEpisodes = result.1 }
             if episodeFractions != result.2 { episodeFractions = result.2 }
             if status == Self.historyRefreshFailure { status = "Synced with Anime Sync" }
-            return true
-        } catch CoreError.unauthorized { if epoch == accountEpoch { clearUnauthorized() } }
-        catch is CancellationError { }
-        catch { if epoch == accountEpoch, status != Self.historyRefreshFailure { status = Self.historyRefreshFailure } }
-        return false
+            return result.3
+        } catch CoreError.unauthorized {
+            if epoch == accountEpoch { clearUnauthorized() }
+            throw CoreError.unauthorized
+        } catch is CancellationError { throw CancellationError() }
+        catch {
+            if epoch == accountEpoch, status != Self.historyRefreshFailure { status = Self.historyRefreshFailure }
+            throw error
+        }
     }
     func pollContinueWatching() async {
         let clock = ContinuousClock()
@@ -136,9 +146,9 @@ import Combine
             do { try await clock.sleep(until: deadline) } catch { return }
         }
     }
-    /// Continue selection always refetches the authoritative series head before navigation.
-    func freshContinue(animeID: String) async -> HistoryEntry? {
-        guard await refreshHistory() else { return nil }; return history.continuing.first { $0.animeID == animeID }
+    /// The selected series can be outside the rows displayed on Home.
+    func freshCheckpoint(animeID: String) async throws -> HistoryEntry? {
+        try await readHistory(animeID: animeID)
     }
     private func progressPath(_ metadata: AnimeMetadata) -> String {
         var parts = URLComponents(); parts.path = "/api/progress"
@@ -152,10 +162,24 @@ import Combine
         let position = saved.map { AppWebPolicy.resume(position: $0["current_time"]?.double ?? 0, duration: $0["duration"]?.double ?? 0, completed: $0["completed"]?.bool ?? false) } ?? 0
         return (response, ResumeSnapshot(position: position, generation: generation, sessionID: sync["session_id"]?.string))
     }
-    func resume(metadata: AnimeMetadata) async throws -> ResumeSnapshot {
+    func resume(metadata: AnimeMetadata, continueFrom checkpointEpisode: String? = nil) async throws -> ResumeSnapshot {
         guard metadata.isValid else { throw CoreError.invalidMetadata }; guard !token.isEmpty else { return ResumeSnapshot(position: 0, generation: 0, sessionID: nil) }
         let epoch = accountEpoch
-        do { return try await queue.run { [self] in try await head(metadata, epoch: epoch).1 } }
+        do { return try await queue.run { [self] in
+            let (response, snapshot) = try await head(metadata, epoch: epoch)
+            if let checkpointEpisode, let active = response["sync"]?.object?["episode"]?.string,
+               !(snapshot.sessionID ?? "").isEmpty, !active.isEmpty {
+                guard AppWebPolicy.identity(animeID: metadata.animeID,episode: active),
+                      Double(active) == Double(metadata.episode) || Double(active) == Double(checkpointEpisode) else {
+                    throw CoreError.conflict("Playback moved to another episode. Try Continue again.")
+                }
+            }
+            if let checkpointEpisode, checkpointEpisode != metadata.episode,
+               response["progress"]?.object?["completed"]?.bool == true {
+                throw CoreError.conflict("The next episode is already watched. Choose Continue again.")
+            }
+            return snapshot
+        } }
         catch CoreError.unauthorized { if epoch == accountEpoch { clearUnauthorized() }; throw CoreError.unauthorized }
     }
     func begin(metadata: AnimeMetadata, explicit: Bool, expectedSourceGeneration: Int64? = nil) async throws -> PlaybackStart {

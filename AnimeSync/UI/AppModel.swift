@@ -189,7 +189,7 @@ struct TakeoverRequest: Identifiable {
               let id = Int64(parts[1]) else {
             message = "Refresh your library before continuing this anime."; return
         }
-        await continueWatching(animeID: String(id))
+        await continueWatching(animeID: String(id),card: card)
     }
     private func libraryWatchURL(_ card: SyncLibraryCard) -> URL? {
         guard ProviderPolicy.isLegacyNativeHistoryURL(card.url) else { return card.url }
@@ -203,27 +203,47 @@ struct TakeoverRequest: Identifiable {
         target.fragment = "anime-sync-id=\(id)&anime-sync-ep=\(episode)"
         return target.url
     }
-    private func continueWatching(animeID: String) async {
+    private func continueWatching(animeID: String,card: SyncLibraryCard? = nil) async {
         guard !busy, active else { return }; busy = true; defer { busy = false }
         let epoch = resolvingEpoch, account = sync.accountGeneration, selectedRoute = route
-        let fresh = await sync.freshContinue(animeID: animeID)
-        guard active, epoch == resolvingEpoch, route == selectedRoute,
-              account == sync.accountGeneration, !Task.isCancelled else { return }
-        guard let fresh else { message = "Could not refresh this episode. Reconnect Anime Sync and try again."; return }
+        func selectionIsCurrent() -> Bool {
+            active && epoch == resolvingEpoch && route == selectedRoute && account == sync.accountGeneration && !Task.isCancelled
+        }
         do {
+            let fresh = try await sync.freshCheckpoint(animeID: animeID)
+            guard selectionIsCurrent() else { return }
+            guard let fresh, card != nil || fresh.resumePosition > 0 else {
+                message = "There’s no current episode to resume for this title."; return
+            }
+            var target = fresh
+            if fresh.completed {
+                guard let next = card?.nextAfter(fresh), !sync.isEpisodeWatched(animeID: animeID,episode: next) else {
+                    message = "The saved episode is complete. Choose an episode from Miruro."; return
+                }
+                target.episode = next
+                target.watchURL = nil
+            }
             // Capture ownership before source discovery, without promoting a
             // cached checkpoint into an explicit seek. Native begin selects the
             // position and rejects this fence if another device advances it.
-            let source = try await sync.resume(metadata: fresh.metadata)
-            guard active, epoch == resolvingEpoch, route == selectedRoute,
-                  account == sync.accountGeneration, !Task.isCancelled else { return }
-            let approvedWatch = fresh.watchURL.flatMap { AppWebPolicy.isProvider($0) && !ProviderPolicy.isLegacyNativeHistoryURL($0) ? $0 : nil }
-            open(approvedWatch ?? fresh.resolverURL)
-            pendingSourceGeneration = source.generation
-        } catch {
-            if active, epoch == resolvingEpoch, route == selectedRoute, account == sync.accountGeneration {
-                message = "Could not refresh this episode. Reconnect Anime Sync and try again."
+            let source = try await sync.resume(metadata: target.metadata,continueFrom: fresh.episode)
+            guard selectionIsCurrent() else { return }
+            let approvedWatch = target.watchURL.flatMap { url -> URL? in
+                guard AppWebPolicy.isProvider(url), !ProviderPolicy.isLegacyNativeHistoryURL(url),
+                      let parts = URLComponents(url: url,resolvingAgainstBaseURL: false),
+                      let episodes = parts.queryItems?.filter({ $0.name == "ep" }),
+                      episodes.count == 1, episodes[0].value == target.episode else { return nil }
+                var clean = parts; clean.fragment = nil
+                return clean.url
             }
+            message = nil
+            open(approvedWatch ?? target.resolverURL)
+            if let number = Double(target.episode) { pendingNextIdentity = (target.animeID,number) }
+            pendingSourceGeneration = source.generation
+        } catch CoreError.conflict(let detail) {
+            if selectionIsCurrent() { message = detail }
+        } catch {
+            if selectionIsCurrent() { message = "Could not read current progress from Anime Sync. Check your connection and try again." }
         }
     }
     func playHere() async {

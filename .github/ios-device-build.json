@@ -1,5 +1,5 @@
 {
-  "version": "0.1.21",
-  "build": 22,
-  "reason": "Refresh Continue Watching while Home is visible and retry queued playback saves."
+  "version": "0.1.22",
+  "build": 23,
+  "reason": "Resolve library selections from fresh progress and fence cross-device episode changes."
 }

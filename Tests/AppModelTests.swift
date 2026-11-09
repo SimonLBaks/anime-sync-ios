@@ -44,8 +44,8 @@ import Foundation
             "duration": .number(1400),"completed": .bool(false),
             "updated_at": .string("2026-11-06T16:00:00Z")])])]
     }
-    private func head(_ generation: Int64 = 7) -> JSONObject {
-        ["sync": .object(["generation": .integer(generation),"session_id": .string("fixture-pc-session")]),
+    private func head(_ generation: Int64 = 7,episode: String = "8") -> JSONObject {
+        ["sync": .object(["generation": .integer(generation),"session_id": .string("fixture-pc-session"),"episode": .string(episode)]),
          "progress": .object(["current_time": .number(900),"duration": .number(1400),"completed": .bool(false)])]
     }
     private func isHead(_ request: URLRequest) -> Bool {
@@ -117,6 +117,65 @@ import Foundation
         XCTAssertEqual(model.route.section,"Anime Sync")
         XCTAssertNotNil(model.message)
         XCTAssertFalse(model.provider.currentURL.path.hasPrefix("/watch/"))
+    }
+
+    func testLibraryContinueCanOpenASeriesOutsideHomeAndWithAnEarlyCheckpoint() async throws {
+        let http = AppModelHTTP(), model = try make(http)
+        model.navigate("Anime Sync")
+        var row = try XCTUnwrap(history()["progress"]?.array?.first?.object)
+        row["updated_at"] = .string("2026-11-06T15:00:00Z")
+        let newer: [JSONValue] = (100...124).map { id in
+            var item = row
+            item["anime_id"] = .string(String(id))
+            item["updated_at"] = .string("2026-11-06T16:00:00Z")
+            return .object(item)
+        }
+        for position in [900.0, 2.0] {
+            row["current_time"] = .number(position)
+            let rows: JSONObject = ["progress": .array(newer + [.object(row)])]
+            http.respond = { request in try self.reply(self.isHead(request) ? self.head() : rows) }
+            await model.openLibraryCard(try card())
+            XCTAssertEqual(model.route.url?.fragment,"anime-sync-id=21&anime-sync-ep=8")
+            XCTAssertEqual(model.sync.history.continuing.count,24)
+            XCTAssertFalse(model.sync.history.continuing.contains { $0.animeID == "21" })
+            model.navigate("Anime Sync")
+        }
+    }
+
+    func testCompletedLibraryCheckpointOpensAdvertisedNumericNextEpisode() async throws {
+        let http = AppModelHTTP(), model = try make(http)
+        model.navigate("Anime Sync")
+        let next = try XCTUnwrap(SyncLibraryCard(json: [
+            "key": .string("miruro:21"),"title": .string("One Piece"),
+            "url": .string("https://miruro.cx/watch/21/fixture-21?ep=8"),
+            "episode": .integer(9),"next_episode": .integer(9),"checkpoint_episode": .string("8"),
+            "continuing": .bool(true),"has_new": .bool(false)
+        ]))
+        XCTAssertEqual(next.episode,"9")
+        var row = try XCTUnwrap(history()["progress"]?.array?.first?.object)
+        row["completed"] = .bool(true)
+        let completed = row
+        let old = try XCTUnwrap(history("6")["progress"]?.array?.first)
+        http.respond = { request in
+            if self.isHead(request) {
+                XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url),resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "episode" })?.value,"9")
+                return try self.reply(self.head(episode: "8"))
+            }
+            return try self.reply(["progress": .array([.object(completed),old])])
+        }
+        await model.openLibraryCard(next)
+        XCTAssertEqual(model.route.url?.fragment,"anime-sync-id=21&anime-sync-ep=9")
+        XCTAssertTrue(http.requests.allSatisfy { $0.httpMethod == "GET" })
+    }
+
+    func testContinueDoesNotOpenOldEpisodeWhenAnotherDeviceChangesTheSeriesHead() async throws {
+        let http = AppModelHTTP(), model = try make(http)
+        model.navigate("Anime Sync")
+        http.respond = { request in try self.reply(self.isHead(request) ? self.head(episode: "9") : self.history()) }
+        await model.openLibraryCard(try card())
+        XCTAssertEqual(model.route.section,"Anime Sync")
+        XCTAssertEqual(model.message,"Playback moved to another episode. Try Continue again.")
     }
 
     func testChangingPageWhileContinueOwnershipLoadsCannotOpenThePreviousSelection() async throws {
