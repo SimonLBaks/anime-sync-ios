@@ -49,8 +49,8 @@ import XCTest
 
     func testScopedProxyPreservesDirectTrafficAndAllowsSystemFailover() async throws {
         var listeners: [NWListener] = []
-        let routing = AppNetworkRouting(configuration: try deployment(), listenerFactory: { parameters, port in
-            let listener = try NWListener(using: parameters, on: port)
+        let routing = AppNetworkRouting(configuration: try deployment(), listenerFactory: { parameters in
+            let listener = try NWListener(using: parameters)
             listeners.append(listener)
             return listener
         })
@@ -67,7 +67,7 @@ import XCTest
             XCTAssertTrue(proxy.allowFailover)
         }
 
-        let direct = AppNetworkRouting(configuration: .generic, listenerFactory: { _, _ in
+        let direct = AppNetworkRouting(configuration: .generic, listenerFactory: { _ in
             XCTFail("A deployment without routing overrides needs no listener")
             throw NWError.posix(.EINVAL)
         })
@@ -81,8 +81,9 @@ import XCTest
     func testCancelledListenerRecoversAndIgnoresLateStateFromOldListener() async throws {
         var listeners: [NWListener] = []
         var requestedPorts: [UInt16] = []
-        let routing = AppNetworkRouting(configuration: try deployment(), listenerFactory: { parameters, port in
-            let listener = try NWListener(using: parameters, on: port)
+        let routing = AppNetworkRouting(configuration: try deployment(), listenerFactory: { parameters in
+            guard case .hostPort(_, let port)? = parameters.requiredLocalEndpoint else { throw NWError.posix(.EINVAL) }
+            let listener = try NWListener(using: parameters)
             listeners.append(listener)
             requestedPorts.append(port.rawValue)
             return listener
@@ -97,6 +98,7 @@ import XCTest
         try await routing.recover()
         let replacementPort = try XCTUnwrap(routing.port)
         XCTAssertEqual(requestedPorts.dropFirst().first, firstPort)
+        XCTAssertEqual(replacementPort, firstPort, "An available previous port should be reused")
         let replacementCount = listeners.count
         XCTAssertGreaterThan(replacementCount, 1)
 
@@ -108,10 +110,34 @@ import XCTest
         connection.cancel()
     }
 
+    func testRecoveryUsesAnAvailablePortWhenPreferredBindIsRejected() async throws {
+        var listeners: [NWListener] = []
+        var requestedPorts: [UInt16] = []
+        let routing = AppNetworkRouting(configuration: try deployment(), listenerFactory: { parameters in
+            guard case .hostPort(_, let port)? = parameters.requiredLocalEndpoint else { throw NWError.posix(.EINVAL) }
+            requestedPorts.append(port.rawValue)
+            guard port == .any else { throw NWError.posix(.EINVAL) }
+            let listener = try NWListener(using: parameters)
+            listeners.append(listener)
+            return listener
+        })
+        defer { listeners.forEach { $0.cancel() } }
+        try await routing.start()
+        let firstPort = try XCTUnwrap(routing.port)
+        try XCTUnwrap(listeners.first).cancel()
+        try await waitForInvalidation(routing)
+
+        try await routing.recover()
+
+        XCTAssertEqual(requestedPorts, [0, firstPort, 0])
+        let connection = try await client(port: XCTUnwrap(routing.port))
+        connection.cancel()
+    }
+
     func testResetClosesExistingSocketsAndMakesCapacityAvailableAgain() async throws {
         var listener: NWListener?
-        let routing = AppNetworkRouting(configuration: try deployment(), listenerFactory: { parameters, port in
-            let server = try NWListener(using: parameters, on: port)
+        let routing = AppNetworkRouting(configuration: try deployment(), listenerFactory: { parameters in
+            let server = try NWListener(using: parameters)
             listener = server
             return server
         }, connectionLimit: 1)
@@ -141,8 +167,8 @@ import XCTest
 
     func testIncompleteConnectClosesAtBoundedDeadline() async throws {
         var listener: NWListener?
-        let routing = AppNetworkRouting(configuration: try deployment(), listenerFactory: { parameters, port in
-            let server = try NWListener(using: parameters, on: port)
+        let routing = AppNetworkRouting(configuration: try deployment(), listenerFactory: { parameters in
+            let server = try NWListener(using: parameters)
             listener = server
             return server
         })

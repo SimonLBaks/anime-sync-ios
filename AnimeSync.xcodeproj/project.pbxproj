@@ -283,7 +283,7 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "24";
+                CURRENT_PROJECT_VERSION = "25";
                 MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -340,7 +340,7 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "24";
+                CURRENT_PROJECT_VERSION = "25";
                 MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -364,7 +364,7 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "24";
+                CURRENT_PROJECT_VERSION = "25";
                 MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -474,7 +474,7 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "24";
+                CURRENT_PROJECT_VERSION = "25";
                 MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -628,7 +628,7 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "24";
+                CURRENT_PROJECT_VERSION = "25";
                 MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -679,7 +679,7 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "24";
+                CURRENT_PROJECT_VERSION = "25";
                 MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

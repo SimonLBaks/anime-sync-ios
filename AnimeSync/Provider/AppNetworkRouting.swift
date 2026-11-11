@@ -6,7 +6,7 @@ import WebKit
 @MainActor final class AppNetworkRouting {
     static let shared = AppNetworkRouting()
     private let deployment: AppConfiguration
-    private let makeListener: (NWParameters, NWEndpoint.Port) throws -> NWListener
+    private let makeListener: (NWParameters) throws -> NWListener
     private var listener: NWListener?
     private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var startupTimeout: Task<Void, Never>?
@@ -15,7 +15,7 @@ import WebKit
     private let tunnels: TunnelPool
 
     init(configuration: AppConfiguration = .current,
-         listenerFactory: @escaping (NWParameters, NWEndpoint.Port) throws -> NWListener = { try NWListener(using: $0, on: $1) },
+         listenerFactory: @escaping (NWParameters) throws -> NWListener = { try NWListener(using: $0) },
          connectionLimit: Int = 48) {
         deployment = configuration
         makeListener = listenerFactory
@@ -82,8 +82,10 @@ import WebKit
         let requestedPort = usePreferredPort ? preferredPort ?? .any : .any
         do {
             let parameters = NWParameters.tcp
+            // The endpoint supplies both the loopback address and port. Passing
+            // the nonzero port to NWListener as well can fail with EINVAL.
             parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: requestedPort)
-            let server = try makeListener(parameters, requestedPort)
+            let server = try makeListener(parameters)
             listener = server
             let pool = tunnels
             let generation = UUID()
@@ -99,13 +101,12 @@ import WebKit
                         self.preferredPort = value
                         self.startupTimeout?.cancel(); self.startupTimeout = nil
                         self.finishWaiters()
-                    case .failed(let error):
-                        if requestedPort != .any, error == .posix(.EADDRINUSE) {
+                    case .waiting where self.port == nil && requestedPort == .any: break
+                    case .failed(let error), .waiting(let error):
+                        if self.port == nil, requestedPort != .any {
                             self.listener = nil; self.port = nil; server.cancel()
                             self.openListener(usePreferredPort: false)
                         } else { self.invalidate(error) }
-                    case .waiting(let error):
-                        if self.port != nil { self.invalidate(error) }
                     case .cancelled: self.invalidate(NWError.posix(.ECANCELED))
                     case .setup: break
                     @unknown default: break
@@ -120,7 +121,7 @@ import WebKit
             }
             server.start(queue: .main)
         } catch {
-            if requestedPort != .any, let error = error as? NWError, error == .posix(.EADDRINUSE) {
+            if requestedPort != .any {
                 openListener(usePreferredPort: false)
             } else { invalidate(error) }
         }
