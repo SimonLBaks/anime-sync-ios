@@ -26,7 +26,7 @@ struct AppRoot: View {
             .coordinateSpace(name: "page")
             .onPreferenceChange(SwipeExclusions.self) { exclusions = $0 }
             .simultaneousGesture(DragGesture(minimumDistance: 24,coordinateSpace: .named("page")).onEnded { value in
-                backSwipe(value,windowOrigin: geometry.frame(in: .global).origin)
+                backSwipe(value,pageWidth: geometry.size.width,windowOrigin: geometry.frame(in: .global).origin)
             })
         }
         .sheet(isPresented: Binding(get: { model.tvPanel && model.player == nil },set: { model.tvPanel = $0 })) { TVPanel(model: model) }
@@ -74,12 +74,14 @@ struct AppRoot: View {
             else { Color.clear.allowsHitTesting(false) }
         }
     }
-    private func backSwipe(_ value: DragGesture.Value,windowOrigin: CGPoint) {
-        guard value.translation.width > 96, value.translation.width > abs(value.translation.height) * 2,
-              value.startLocation.x < 20 || !exclusions.contains(where: { $0.contains(value.startLocation) }) else { return }
+    private func backSwipe(_ value: DragGesture.Value,pageWidth: CGFloat,windowOrigin: CGPoint) {
+        let leftwardDistance = -value.translation.width
+        let startsAtRightEdge = value.startLocation.x >= pageWidth - 20
+        guard leftwardDistance > 96, leftwardDistance > abs(value.translation.height) * 2,
+              startsAtRightEdge || !exclusions.contains(where: { $0.contains(value.startLocation) }) else { return }
         let expectedRoute = model.route, expectedSignIn = model.signingIn
         Task { @MainActor in
-            if value.startLocation.x >= 20 && !model.drawer {
+            if !startsAtRightEdge && !model.drawer {
                 let windowPoint = CGPoint(x: windowOrigin.x + value.startLocation.x,y: windowOrigin.y + value.startLocation.y)
                 if showDashboard {
                     let view = model.dashboard.webView
@@ -89,7 +91,8 @@ struct AppRoot: View {
                     guard view.window != nil, await model.provider.allowsBackSwipe(at: view.convert(windowPoint,from: nil)) else { return }
                 }
             }
-            guard model.route == expectedRoute, model.signingIn == expectedSignIn else { return }
+            guard model.route == expectedRoute, model.signingIn == expectedSignIn,
+                  model.player == nil, !model.tvPanel, !model.pairingSheet else { return }
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),to: nil,from: nil,for: nil)
             await model.back()
         }

@@ -13,6 +13,8 @@ FOCUSED_UNIT_CLASSES = {
 FEATURES = [
     'testNativeLibraryFiltersSearchAndReturn',
     'testPaneLabelsLogoOutsideIdleAndLandscapeReachability',
+    'testPreviousPageEdgeBackUnwindsVisitedSections',
+    'testHomeContinueBelowHeroThreePostersAndSeparateHistoryTen',
     'testEpisodeWindowTitlesRangesWatchedAndNamedMiruroSources',
     'testStandaloneMutedNativeFrameSubtitlesAndClose',
 ]

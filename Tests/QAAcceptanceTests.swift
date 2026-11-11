@@ -340,15 +340,30 @@ final class QAAcceptanceTests: XCTestCase {
 
     @MainActor func testPreviousPageEdgeBackUnwindsVisitedSections() {
         let app = launch()
-        select(app, "trending")
-        select(app, "discover")
-        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.002, dy: 0.45))
-        let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.45))
-        from.press(forDuration: 0.05, thenDragTo: to)
-        XCTAssertTrue(element(app, "screen.trending").waitForExistence(timeout: 4))
-        from.press(forDuration: 0.05, thenDragTo: to)
-        XCTAssertTrue(element(app, "screen.home").waitForExistence(timeout: 4))
-        XCTAssertTrue(element(app, "nav.toggle").exists)
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for orientation in [UIDeviceOrientation.portrait,.landscapeLeft] {
+            XCUIDevice.shared.orientation = orientation
+            let oriented = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in
+                (app.frame.width > app.frame.height) == orientation.isLandscape
+            },object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [oriented],timeout: 6),.completed)
+            select(app, "trending")
+            select(app, "discover")
+            let discover = element(app,"screen.discover")
+            XCTAssertTrue(discover.waitForExistence(timeout: 4))
+            let viewport = app.frame
+            let page = discover.frame.intersection(viewport)
+            let left = playerCoordinate(app,at: CGPoint(x: page.minX + 8,y: page.midY),viewport: viewport)
+            let right = playerCoordinate(app,at: CGPoint(x: page.maxX - 8,y: page.midY),viewport: viewport)
+            let center = playerCoordinate(app,at: CGPoint(x: page.midX,y: page.midY),viewport: viewport)
+            left.press(forDuration: 0.05,thenDragTo: center)
+            XCTAssertTrue(discover.exists,"A rightward swipe must leave the current page open")
+            right.press(forDuration: 0.05,thenDragTo: center)
+            XCTAssertTrue(element(app, "screen.trending").waitForExistence(timeout: 4))
+            right.press(forDuration: 0.05,thenDragTo: center)
+            XCTAssertTrue(element(app, "screen.home").waitForExistence(timeout: 4))
+            XCTAssertTrue(element(app, "nav.toggle").exists)
+        }
     }
 
     @MainActor func testNativeLibraryFiltersSearchAndReturn() {
