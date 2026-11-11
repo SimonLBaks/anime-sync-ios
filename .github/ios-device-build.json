@@ -1,5 +1,5 @@
 {
-  "version": "0.1.23",
-  "build": 25,
-  "reason": "Build 0.1.23 and run focused playback and connection recovery checks."
+  "version": "0.1.24",
+  "build": 26,
+  "reason": "Build 0.1.24 and verify the native player back gesture."
 }

@@ -989,8 +989,20 @@ struct NativePlayerController: UIViewControllerRepresentable {
             return tap
         }
         @objc func videoTapped(_ gesture: UITapGestureRecognizer) { if gesture.state == .ended { onVideoTap() } }
-        @objc func swipe(_ gesture: UIPanGestureRecognizer) { if gesture.state == .ended { let p = gesture.translation(in: gesture.view); if p.x > 96 && abs(p.y) < p.x * 0.5 { model.onClose?() } } }
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool { if gestureRecognizer is UITapGestureRecognizer { return true }; guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }; let v = pan.velocity(in: pan.view); return v.x > abs(v.y) * 1.5 }
+        @objc func swipe(_ gesture: UIPanGestureRecognizer) {
+            guard gesture.state == .ended,
+                  Self.isBackSwipe(gesture.translation(in: gesture.view), minimum: 96, horizontalRatio: 2) else { return }
+            model.onClose?()
+        }
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            if gestureRecognizer is UITapGestureRecognizer { return true }
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            return Self.isBackSwipe(pan.velocity(in: pan.view), minimum: 0, horizontalRatio: 1.5)
+        }
+        static func isBackSwipe(_ movement: CGPoint, minimum: CGFloat, horizontalRatio: CGFloat) -> Bool {
+            let leftwardDistance = -movement.x
+            return leftwardDistance > minimum && leftwardDistance > abs(movement.y) * horizontalRatio
+        }
         static func acceptsVideoTouch(_ original: UIView?) -> Bool { var current = original; while let v = current { if v is UIControl || v is UIScrollView || String(describing: type(of: v)).localizedCaseInsensitiveContains("scrub") { return false }; current = v.superview }; return true }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,shouldReceive touch: UITouch) -> Bool { Self.acceptsVideoTouch(touch.view) }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }

@@ -167,6 +167,16 @@ import CoreMedia
         }
     }
 
+    func testPlayerBackSwipeRequiresEnoughLeftwardHorizontalMovement() {
+        let coordinator = NativePlayerController.Coordinator.self
+        XCTAssertTrue(coordinator.isBackSwipe(CGPoint(x: -120,y: 20),minimum: 0,horizontalRatio: 1.5))
+        XCTAssertFalse(coordinator.isBackSwipe(CGPoint(x: 120,y: 20),minimum: 0,horizontalRatio: 1.5))
+        XCTAssertTrue(coordinator.isBackSwipe(CGPoint(x: -120,y: 20),minimum: 96,horizontalRatio: 2))
+        XCTAssertFalse(coordinator.isBackSwipe(CGPoint(x: 120,y: 20),minimum: 96,horizontalRatio: 2))
+        XCTAssertFalse(coordinator.isBackSwipe(CGPoint(x: -90,y: 0),minimum: 96,horizontalRatio: 2))
+        XCTAssertFalse(coordinator.isBackSwipe(CGPoint(x: -120,y: 80),minimum: 96,horizontalRatio: 2))
+    }
+
     func testCaptionLayoutUsesVideoBoundsWithoutPillarStripsAndAvoidsVisibleTransport() {
         let viewport = CGRect(x: 0,y: 0,width: 852,height: 393)
         let video = CGRect(x: 164,y: 0,width: 524,height: 393)
