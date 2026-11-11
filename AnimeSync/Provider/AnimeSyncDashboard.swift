@@ -58,7 +58,12 @@ import WebKit
         deliveredAuthentication = false
         cookieReadPending = false; entry = nil; setEntry = true
         if fixture { onFixtureLoad?(clean); return }
+        refreshNetwork()
         installScripts(); ownLoad = true; webView.load(URLRequest(url: clean))
+    }
+    func refreshNetwork(reloadFailed: Bool = false) {
+        AppNetworkRouting.shared.configure(webView.configuration.websiteDataStore)
+        if reloadFailed, error != nil { reload() }
     }
     func reload() { load(origin: currentOrigin,accountGeneration: accountGeneration) }
     func safeWebBack() async -> Bool {

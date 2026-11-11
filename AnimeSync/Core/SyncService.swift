@@ -23,6 +23,7 @@ import Combine
     private let pendingPrefix = "animesync.pending:"
     private let heldPrefix = "animesync.held:"
     private static let historyRefreshFailure = "Could not refresh history. Check your connection."
+    var historyRefreshFailed: Bool { status == Self.historyRefreshFailure }
     private struct StoredSession: Codable { let origin: URL; let token: String; let deviceID: String }
 
     init(transport: HTTPTransport = CoreHTTPTransport(), secrets: CoreSecrets = KeychainSecrets(), preferences: UserDefaults = .standard) {

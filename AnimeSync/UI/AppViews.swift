@@ -231,12 +231,12 @@ struct CatalogueScreen: View {
                     PosterRow(title: group.title,identifier: "row." + group.title.lowercased(),viewportWidth: viewport.size.width) { width in ForEach(group.items) { card in Poster(title: card.title,url: card.posterURL,badge: card.badge,width: width,identifier: card.id) { model.open(card.url) } } }
                 }
                 if model.provider.loading { ProgressView("Loading Miruro…").frame(maxWidth: .infinity).padding(30) }
-                if let error = model.provider.error { empty(error,button: "Try again") { model.provider.reload() } }
+                if let error = model.provider.error { empty(error,button: "Try again") { Task { await model.retryConnection() } } }
                 else if !model.provider.loading && groups.isEmpty && model.provider.hero == nil && !(model.route.section == "Home" && !model.sync.history.continuing.isEmpty) {
                     empty(model.provider.emptyMessage,button: "Open website") { model.website() }.accessibilityIdentifier("search.empty")
                 }
             }.frame(width: viewport.size.width,alignment: .leading).padding(.bottom,28)
-        }.scrollDismissesKeyboard(.interactively).refreshable { model.provider.reload(); await model.sync.refreshHistory() }
+        }.scrollDismissesKeyboard(.interactively).refreshable { await model.retryConnection() }
             .frame(width: viewport.size.width)
             .accessibilityIdentifier("screen." + model.route.section.lowercased())
         }
@@ -277,6 +277,9 @@ struct LibraryScreen: View {
         return ScrollView {
             VStack(alignment: .leading,spacing: 20) {
                 HStack { Image("anime-sync-logo").resizable().frame(width: 44,height: 44); VStack(alignment: .leading) { Text("Your library").font(.title2.bold()); Text(model.sync.status).font(.caption).foregroundStyle(.secondary).lineLimit(2) }; Spacer() }.padding(.top,12)
+                if model.sync.historyRefreshFailed || model.dashboard.error != nil {
+                    Button("Try again") { Task { await model.retryConnection() } }.font(.footnote)
+                }
                 TextField("Search your library",text: $model.libraryQuery).textFieldStyle(.roundedBorder).autocorrectionDisabled().accessibilityIdentifier("library.search").keepHorizontalGesture()
                 HStack { filter("Continue","continue"); filter("New episodes","new"); filter("All anime","all") }
                 LazyVGrid(columns: columns,alignment: .leading,spacing: 22) {
@@ -288,7 +291,7 @@ struct LibraryScreen: View {
                 }
                 Button("Open full dashboard") { model.signIn() }.font(.footnote)
             }.frame(width: contentWidth,alignment: .leading).padding(.horizontal,16).padding(.bottom,30)
-        }.frame(width: width).scrollDismissesKeyboard(.interactively).refreshable { model.dashboard.load(origin: model.sync.baseURL,accountGeneration: model.sync.accountGeneration); await model.sync.refreshHistory() }.accessibilityIdentifier("screen.anime-sync")
+        }.frame(width: width).scrollDismissesKeyboard(.interactively).refreshable { await model.retryConnection() }.accessibilityIdentifier("screen.anime-sync")
     }
     private func filter(_ title: String,_ id: String) -> some View { Button(title) { model.libraryFilter = id }.font(.caption.weight(.semibold)).padding(.horizontal,12).padding(.vertical,10).background(model.libraryFilter == id ? Theme.accent.opacity(0.2) : Theme.surface,in: Capsule()).accessibilityIdentifier("library.filter." + id) }
 }

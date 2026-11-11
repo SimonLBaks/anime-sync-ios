@@ -21,7 +21,7 @@ let package = Package(
             name: "CoreProtocolTests",
             dependencies: ["AnimeSync"],
             path: "Tests",
-            exclude: ["AppModelTests.swift", "NativePlaybackTests.swift", "ProviderTests.swift", "QAAcceptanceTests.swift"],
+            exclude: ["AppModelTests.swift", "NativePlaybackTests.swift", "NetworkRoutingTests.swift", "ProviderTests.swift", "QAAcceptanceTests.swift"],
             sources: ["ProtocolTests.swift", "AppConfigurationTests.swift"],
             swiftSettings: [.define("CORE_PROTOCOLS_ONLY")]
         )

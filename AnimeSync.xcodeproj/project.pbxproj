@@ -283,8 +283,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "23";
-                MARKETING_VERSION = "0.1.22";
+                CURRENT_PROJECT_VERSION = "24";
+                MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -340,8 +340,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "23";
-                MARKETING_VERSION = "0.1.22";
+                CURRENT_PROJECT_VERSION = "24";
+                MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -364,8 +364,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "23";
-                MARKETING_VERSION = "0.1.22";
+                CURRENT_PROJECT_VERSION = "24";
+                MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -446,6 +446,12 @@
             path = "AnimeSync/Core/AppConfiguration.swift";
             sourceTree = "<group>";
         };
+        8E2E13018B9B38AE4DEBDFD0 = {
+            isa = PBXFileReference;
+            lastKnownFileType = "sourcecode.swift";
+            path = "Tests/NetworkRoutingTests.swift";
+            sourceTree = "<group>";
+        };
         8E35F39F8F2DFA6F07E4836F = {
             isa = PBXBuildFile;
             fileRef = 875C2273C5A79E537C280CA8;
@@ -468,8 +474,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "23";
-                MARKETING_VERSION = "0.1.22";
+                CURRENT_PROJECT_VERSION = "24";
+                MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -622,8 +628,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "23";
-                MARKETING_VERSION = "0.1.22";
+                CURRENT_PROJECT_VERSION = "24";
+                MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -648,12 +654,16 @@
         D60409337774CCE94860379A = {
             isa = PBXGroup;
             name = "Tests";
-            children = (6DDF5EA27ADB8873E5D15086, 860A52F5357752593D0FA61D, 352A54F676B4A687726203F6, 1F50083C512631649BCD5715, 0B39799CBA505CBAC4E8E77F, B39930B0B722CEC537811850);
+            children = (6DDF5EA27ADB8873E5D15086, 860A52F5357752593D0FA61D, 352A54F676B4A687726203F6, 8E2E13018B9B38AE4DEBDFD0, 1F50083C512631649BCD5715, 0B39799CBA505CBAC4E8E77F, B39930B0B722CEC537811850);
             sourceTree = "<group>";
         };
         D695B4DEADB6979B3EFA0935 = {
             isa = PBXBuildFile;
             fileRef = ED7607FB223A10599A3B87FE;
+        };
+        D8CFE7D72B33099F017D03C5 = {
+            isa = PBXBuildFile;
+            fileRef = 8E2E13018B9B38AE4DEBDFD0;
         };
         DBA0F0513D9EFFF8AED3AF5A = {
             isa = PBXBuildFile;
@@ -669,8 +679,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "23";
-                MARKETING_VERSION = "0.1.22";
+                CURRENT_PROJECT_VERSION = "24";
+                MARKETING_VERSION = "0.1.23";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -692,7 +702,7 @@
         E1254D0ED4EC3D8FB6A04FFE = {
             isa = PBXSourcesBuildPhase;
             buildActionMask = 2147483647;
-            files = (2A0614FA0CDCB2EC7DA8A666, 1CD7384555B5176E9F5ACF26, 69C752904C491A3C85E27B0D, F5C491B282FFFD22138DCC59, DBA0F0513D9EFFF8AED3AF5A);
+            files = (2A0614FA0CDCB2EC7DA8A666, 1CD7384555B5176E9F5ACF26, 69C752904C491A3C85E27B0D, D8CFE7D72B33099F017D03C5, F5C491B282FFFD22138DCC59, DBA0F0513D9EFFF8AED3AF5A);
             runOnlyForDeploymentPostprocessing = 0;
         };
         E3091FDF741F176176162E4F = {

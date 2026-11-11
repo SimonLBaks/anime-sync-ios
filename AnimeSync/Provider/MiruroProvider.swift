@@ -144,6 +144,7 @@ import WebKit
                     self.webView.configuration.userContentController.add(rules); self.privacyRulesInstalled = true
                 }
                 guard self.navigationEpoch == epoch, !Task.isCancelled else { return }
+                self.refreshNetwork()
                 self.ownedNavigation = true
                 self.webView.load(URLRequest(url: url))
             } catch {
@@ -151,6 +152,10 @@ import WebKit
                 self.loading = false; self.error = "The page's privacy boundary could not initialize. Try again."
             }
         }
+    }
+    func refreshNetwork(reloadFailed: Bool = false) {
+        AppNetworkRouting.shared.configure(webView.configuration.websiteDataStore)
+        if reloadFailed, error != nil { reload() }
     }
     func reload() { open(url: currentURL, native: !websiteMode) }
     func selectEpisode(id: String) {

@@ -24,8 +24,11 @@ protocol HTTPTransport {
 /// Each operation is single-attempt, rejects redirects and stops reading at its body limit.
 final class CoreHTTPTransport: HTTPTransport {
     private let configuration: URLSessionConfiguration
-    init(configuration: URLSessionConfiguration = .ephemeral) {
+    private let prepareConfiguration: (@MainActor (URLSessionConfiguration) async throws -> Void)?
+    init(configuration: URLSessionConfiguration = .ephemeral,
+         prepareConfiguration: (@MainActor (URLSessionConfiguration) async throws -> Void)? = nil) {
         self.configuration = configuration
+        self.prepareConfiguration = prepareConfiguration
         self.configuration.httpCookieStorage = nil
         self.configuration.urlCredentialStorage = nil
         self.configuration.httpShouldSetCookies = false
@@ -37,7 +40,10 @@ final class CoreHTTPTransport: HTTPTransport {
     }
     func request(_ request: URLRequest, maxBytes: Int) async throws -> HTTPReply {
         guard (request.allHTTPHeaderFields ?? [:]).allSatisfy({ Self.isSafeHeaderValue($0.key) && Self.isSafeHeaderValue($0.value) }) else { throw CoreError.invalidResponse }
-        let operation = BoundedHTTPOperation(configuration: configuration, maxBytes: maxBytes)
+        guard let current = configuration.copy() as? URLSessionConfiguration else { throw CoreError.invalidResponse }
+        try await prepareConfiguration?(current)
+        try Task.checkCancellation()
+        let operation = BoundedHTTPOperation(configuration: current, maxBytes: maxBytes)
         return try await operation.perform(request)
     }
 }

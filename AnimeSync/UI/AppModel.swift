@@ -59,12 +59,19 @@ struct TakeoverRequest: Identifiable {
     private var pendingNextIdentity: (anime: String,episode: Double)?
     private var nativeSubtitleContext: (player: UUID, navigation: UInt64, account: UInt64, source: UInt64)?
     private var active = true
+    private var sceneGeneration: UInt64 = 0
     private var handingOff = false
     private var signInProviderURL: URL?
     private var subscriptions: Set<AnyCancellable> = []
+    private let recoverConnection: @MainActor () async throws -> Void
+    private var connectionRecovery: (id: UUID, task: Task<Void,Error>)?
 
-    init(sync: SyncService, tv: TVClient, fixture: Bool = false) {
+    init(sync: SyncService, tv: TVClient, fixture: Bool = false,
+         recoverConnection: (@MainActor () async throws -> Void)? = nil) {
         self.sync = sync; self.tv = tv; self.fixture = fixture
+        self.recoverConnection = recoverConnection ?? {
+            if !fixture { try await AppNetworkRouting.shared.recover() }
+        }
         provider = MiruroProvider(fixture: fixture); dashboard = DashboardProvider(fixture: fixture)
         #if DEBUG
         qa = nil
@@ -74,6 +81,9 @@ struct TakeoverRequest: Identifiable {
     #if DEBUG
     init(qa: QAFixture,liveProvider: Bool = false) {
         self.qa = qa; fixture = true; sync = qa.makeSync(); tv = qa.makeTV()
+        recoverConnection = {
+            if liveProvider { try await AppNetworkRouting.shared.recover() }
+        }
         provider = MiruroProvider(fixture: !liveProvider); dashboard = DashboardProvider(fixture: true)
         if !liveProvider { qa.seedProvider(provider) }
         qa.seedDashboard(dashboard); wire()
@@ -262,9 +272,11 @@ struct TakeoverRequest: Identifiable {
                 guard active, epoch == resolvingEpoch, route == selectedRoute,
                       account == sync.accountGeneration, metadata == provider.metadata,
                       player == nil, !Task.isCancelled else { return }
-                // An explicit Play may remain local-only while offline. Continue
-                // already required a fresh server snapshot before reaching here.
-                pendingSourceGeneration = nil
+                let fraction = sync.episodeProgress(animeID: metadata.animeID,episode: metadata.episode) ?? 0
+                if fraction > 0 && !sync.isEpisodeWatched(animeID: metadata.animeID,episode: metadata.episode) {
+                    message = "Could not read your saved position. Check your connection and press Play again."
+                    return
+                }
             }
         }
         pendingPlay = true; launchIfReady()
@@ -528,7 +540,9 @@ struct TakeoverRequest: Identifiable {
     func background() async {
         let captionContext = nativeSubtitleContext
         let preserveCaptions = captionContext.map { $0.player == player?.id && $0.navigation == resolvingEpoch && $0.account == sync.accountGeneration && $0.source == provider.selectionRevision } == true
-        active = false; clearSelection(); clearBrowser(); tv.stopPolling(); discovery.stop(); dashboard.pause()
+        active = false; sceneGeneration &+= 1
+        connectionRecovery?.task.cancel(); connectionRecovery = nil
+        clearSelection(); clearBrowser(); tv.stopPolling(); discovery.stop(); dashboard.pause()
         // The background transition invalidates pending launches, while this
         // same player's caption scope survives. Actual navigation still fences it.
         if preserveCaptions, let context = captionContext { nativeSubtitleContext = (context.player,resolvingEpoch,context.account,context.source) }
@@ -536,8 +550,42 @@ struct TakeoverRequest: Identifiable {
     }
     func foreground() async {
         active = true; tv.startPolling()
-        if route != .home || player != nil { await sync.refreshHistory(retryPending: true) }
-        if active, let player { forwardNativeSubtitles(provider.subtitles); await player.foreground() }
+        let scene = sceneGeneration
+        // Public pages and the server's normal DNS route are still usable if
+        // the optional home-network override cannot be started.
+        try? await restoreConnection()
+        guard active, scene == sceneGeneration, !Task.isCancelled else { return }
+        let showingProvider = !["Anime Sync","Settings","History"].contains(route.section) && !signingIn
+        provider.refreshNetwork(reloadFailed: player == nil && showingProvider)
+        dashboard.refreshNetwork(reloadFailed: route.section == "Anime Sync" || signingIn)
+        if let player {
+            forwardNativeSubtitles(provider.subtitles)
+            await player.foreground()
+        }
+        if active, scene == sceneGeneration, !Task.isCancelled, route != .home || player != nil {
+            await sync.refreshHistory(retryPending: true)
+        }
+    }
+    private func restoreConnection() async throws {
+        if let recovery = connectionRecovery { try await recovery.task.value; return }
+        let id = UUID()
+        let task = Task { try await recoverConnection() }
+        connectionRecovery = (id,task)
+        defer { if connectionRecovery?.id == id { connectionRecovery = nil } }
+        try await task.value
+    }
+    func retryConnection() async {
+        let expectedRoute = route, epoch = resolvingEpoch, account = sync.accountGeneration
+        try? await restoreConnection()
+        guard active, route == expectedRoute, resolvingEpoch == epoch,
+              sync.accountGeneration == account, !Task.isCancelled else { return }
+        if route.section == "Anime Sync" || signingIn {
+            dashboard.load(origin: sync.baseURL,accountGeneration: account)
+        } else if player == nil {
+            provider.reload()
+        }
+        let refreshed = await sync.refreshHistory(retryPending: true)
+        if refreshed, active, route == expectedRoute, resolvingEpoch == epoch, sync.accountGeneration == account { message = nil }
     }
 }
 
@@ -555,9 +603,12 @@ struct TakeoverRequest: Identifiable {
                 let app = AppModel(qa: QAFixture(),liveProvider: liveProvider); model = app; await app.start(); return
             }
             #endif
-            try await AppNetworkRouting.shared.start()
-            let configuration = URLSessionConfiguration.ephemeral; AppNetworkRouting.shared.configure(configuration)
-            let app = AppModel(sync: SyncService(transport: CoreHTTPTransport(configuration: configuration)),tv: TVClient())
+            try? await AppNetworkRouting.shared.start()
+            let transport = CoreHTTPTransport(prepareConfiguration: { configuration in
+                try? await AppNetworkRouting.shared.start()
+                AppNetworkRouting.shared.configure(configuration)
+            })
+            let app = AppModel(sync: SyncService(transport: transport),tv: TVClient())
             model = app; await app.start()
         } catch { self.error = "Could not start the connection: " + error.localizedDescription }
     }

@@ -69,9 +69,10 @@ if summary.get('failedTests') != 0 or summary.get('skippedTests') != 0 or summar
     raise SystemExit('Required simulator tests did not all pass, or the result summary is unsupported')
 tree = Path('dist/test-tree.json').read_text()
 scope = json.loads(Path('dist/test-scope.json').read_text())
-if scope['focus'] == 'library-resume' and 'AppModelTests' not in tree:
-    raise SystemExit('The result bundle must include the focused app model tests')
-if scope['focus'] != 'library-resume' and not all(name in tree for name in ['ProtocolTests', 'QAAcceptanceTests']):
+if 'unitClasses' in scope:
+    if not all(name in tree for name in scope['unitClasses']):
+        raise SystemExit('The result bundle must include all focused unit test classes')
+elif not all(name in tree for name in ['ProtocolTests', 'QAAcceptanceTests']):
     raise SystemExit('The result bundle must include both protocol and native UI acceptance suites')
 required = scope['unitMethods'] + scope['selectedUIMethods']
 if summary.get('passedTests') != len(required) or not all(name in tree for name in required):

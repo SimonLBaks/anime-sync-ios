@@ -53,11 +53,11 @@ import CoreMedia
     private func reply(_ object: JSONObject, status: Int = 200) throws -> HTTPReply {
         HTTPReply(status: status,body: try JSONEncoder().encode(object))
     }
-    private func snapshot(_ generation: Int64, session: String = "") -> JSONObject {
+    private func snapshot(_ generation: Int64, session: String = "", position: TimeInterval = 120) -> JSONObject {
         ["sync": .object(["generation": .integer(generation),"session_id": .string(session)]),
-         "progress": .object(["current_time": .number(120),"duration": .number(1000),"completed": .bool(false)])]
+         "progress": .object(["current_time": .number(position),"duration": .number(1000),"completed": .bool(false)])]
     }
-    private func make(_ http: PlaybackHTTP, fixture: Bool = false, metadata item: AnimeMetadata? = nil, captionTransport: HTTPTransport? = nil, clock: (() -> (position: TimeInterval,duration: TimeInterval))? = nil, seek: ((AVPlayer,TimeInterval) async -> Void)? = nil) throws -> NativePlaybackModel {
+    private func make(_ http: PlaybackHTTP, fixture: Bool = false, metadata item: AnimeMetadata? = nil, generation: Int64? = nil, captionTransport: HTTPTransport? = nil, clock: (() -> (position: TimeInterval,duration: TimeInterval))? = nil, seek: ((AVPlayer,TimeInterval) async -> Void)? = nil, startupSeekTimeout: TimeInterval = 12, itemFactory: ((MediaSource) async throws -> AVPlayerItem)? = nil) throws -> NativePlaybackModel {
         let name = "qa-ios-player-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: name)); suites.append((name,preferences))
         let secrets = PlaybackMemorySecrets()
@@ -69,7 +69,7 @@ import CoreMedia
         let sync = SyncService(transport: http,secrets: secrets,preferences: preferences)
         let model = NativePlaybackModel(metadata: item ?? metadata,
                                         source: MediaSource(url: URL(string: "https://example.invalid/fixture.mp4")!),
-                                        subtitles: [],sync: sync,fixture: fixture,clock: clock ?? { (position: 120,duration: 1000) },captionTransport: captionTransport,seekOperation: seek ?? { _,_ in })
+                                        subtitles: [],sync: sync,fixture: fixture,generation: generation,clock: clock ?? { (position: 120,duration: 1000) },captionTransport: captionTransport,seekOperation: seek ?? { _,_ in },startupSeekTimeout: startupSeekTimeout,itemFactory: itemFactory)
         model.player.isMuted = true
         models.append(model)
         return model
@@ -650,6 +650,7 @@ import CoreMedia
         await first.value
         XCTAssertTrue(model.isStarting, "Stale completion must not clear the newer request's loading gate")
         XCTAssertNil(model.lease)
+        XCTAssertFalse(http.requests.contains { $0.url?.path == "/api/playback" },"Background cancellation must stop the stale head read before it claims")
         newHead.open(); await second.value
         XCTAssertFalse(model.isStarting)
         XCTAssertEqual(model.lease?.generation,3)
@@ -701,10 +702,11 @@ import CoreMedia
         XCTAssertEqual(http.requests.filter { $0.url?.path == "/api/playback" }.count,claimsBefore)
     }
 
-    func testOwnedForegroundMayContinueTheCapturedCurrentGeneration() async throws {
+    func testDuplicateBackgroundCallbacksKeepTheOwnedForegroundGeneration() async throws {
         let http = PlaybackHTTP(); http.respond = { try self.defaultResponse($0) }
         let model = try make(http)
-        await model.play(explicit: true); await model.background()
+        await model.play(explicit: true); await model.background(); await model.background()
+        XCTAssertEqual(http.requests.filter { $0.url?.path == "/api/progress" && $0.httpMethod == "POST" }.count,1)
         http.respond = { request in
             if request.httpMethod == "GET" { return try self.reply(self.snapshot(2,session: "previous-iphone-session")) }
             if request.url?.path == "/api/playback" {
@@ -715,6 +717,152 @@ import CoreMedia
         }
         await model.foreground()
         XCTAssertEqual(model.lease?.generation,3); XCTAssertGreaterThan(model.player.rate,0)
+    }
+
+    func testOwnedForegroundNetworkFailureWaitsForExplicitFreshPlay() async throws {
+        let http = PlaybackHTTP(); http.respond = { try self.defaultResponse($0) }
+        var seeks: [Double] = [], position = 120.0
+        let model = try make(http,clock: { (position: position,duration: 1000) },seek: { _,at in seeks.append(at); position = at })
+        await model.play(explicit: true)
+        let previousLease = try XCTUnwrap(model.lease)
+        position = 250
+        http.respond = { _ in throw URLError(.notConnectedToInternet) }
+        await model.background(); await model.foreground()
+        XCTAssertEqual(seeks,[120]); XCTAssertNil(model.lease); XCTAssertEqual(model.player.rate,0)
+        XCTAssertFalse(model.isStarting)
+        var retriedOldCheckpoint = false
+        http.respond = { request in
+            if request.url?.path == "/api/progress", request.httpMethod == "POST" {
+                let payload = try self.object(request)
+                XCTAssertEqual(payload["current_time"]?.double,250)
+                XCTAssertEqual(payload["playback_session_id"]?.string,previousLease.id)
+                XCTAssertEqual(payload["playback_generation"]?.integer,2)
+                retriedOldCheckpoint = true
+                return try self.reply(["error": .string("Playback advanced on PC")],status: 409)
+            }
+            if request.httpMethod == "GET" { return try self.reply(self.snapshot(8,session: "new-pc",position: 460)) }
+            if request.url?.path == "/api/playback" {
+                XCTAssertEqual(try self.object(request)["expected_generation"]?.integer,8)
+                return try self.reply(self.snapshot(9,position: 460))
+            }
+            return try self.reply(["ok": .bool(true)])
+        }
+        await model.play(explicit: true)
+        XCTAssertTrue(retriedOldCheckpoint)
+        XCTAssertEqual(seeks,[120,460]); XCTAssertEqual(model.lease?.generation,9)
+        // Remove the old-session-only response before teardown saves this new lease.
+        http.respond = { try self.defaultResponse($0) }
+    }
+
+    func testInitialContinueWithCapturedGenerationDoesNotStartOfflineAtZero() async throws {
+        let http = PlaybackHTTP(); http.respond = { _ in throw URLError(.notConnectedToInternet) }
+        var seeks: [Double] = []
+        let model = try make(http,generation: 8,clock: { (position: 0,duration: 1000) },seek: { _,at in seeks.append(at) })
+        await model.prepare()
+        XCTAssertTrue(seeks.isEmpty); XCTAssertEqual(model.player.rate,0); XCTAssertNil(model.lease)
+        XCTAssertFalse(model.isStarting)
+        XCTAssertEqual(http.requests.map(\.httpMethod),["GET"])
+    }
+
+    func testSignedOutInitialGenerationZeroStillAllowsLocalPlayback() async throws {
+        let http = PlaybackHTTP(); http.respond = { _ in throw URLError(.notConnectedToInternet) }
+        var seeks: [Double] = []
+        let model = try make(http,generation: 0,clock: { (position: 0,duration: 1000) },seek: { _,at in seeks.append(at) })
+        try model.sync.signOut()
+        await model.prepare()
+        XCTAssertEqual(seeks,[0]); XCTAssertTrue(http.requests.isEmpty); XCTAssertNil(model.lease)
+        XCTAssertGreaterThan(model.player.rate,0)
+    }
+
+    func testExplicitRetryCannotFallBackToZeroAfterAConfirmedCheckpoint() async throws {
+        let http = PlaybackHTTP(); http.respond = { try self.defaultResponse($0) }
+        var seeks: [Double] = []
+        var position = 120.0
+        let model = try make(http,clock: { (position: position,duration: 1000) },seek: { _,at in seeks.append(at) })
+        await model.play(explicit: true); await model.background()
+        // A failed AVPlayerItem can report an invalid/zero time. That is not a
+        // valid local fallback when this same episode has a known checkpoint.
+        position = 0
+        http.respond = { _ in throw URLError(.notConnectedToInternet) }
+        await model.play(explicit: true)
+        XCTAssertEqual(seeks,[120]); XCTAssertEqual(model.player.rate,0); XCTAssertNil(model.lease)
+        XCTAssertFalse(model.isStarting)
+    }
+
+    func testBackgroundDuringInitialSeekDoesNotSaveTheUnpositionedItem() async throws {
+        let http = PlaybackHTTP(); http.respond = { try self.defaultResponse($0) }
+        let blocked = gate("initial seek waiting after claim")
+        let model = try make(http,clock: { (position: 0,duration: 1000) },seek: { _,_ in await blocked.wait() })
+        let start = Task { await model.play(explicit: true) }; tasks.append(start)
+        await fulfillment(of: [blocked.started],timeout: 2)
+        XCTAssertEqual(model.lease?.generation,2)
+        await model.background()
+        XCTAssertFalse(model.isStarting); XCTAssertNil(model.lease)
+        XCTAssertFalse(http.requests.contains { $0.httpMethod == "POST" && $0.url?.path == "/api/progress" })
+        blocked.open(); await start.value
+        XCTAssertEqual(model.player.rate,0)
+    }
+
+    func testStartupSeekDeadlineReleasesControlsAndTheUnpositionedLease() async throws {
+        let http = PlaybackHTTP(); http.respond = { try self.defaultResponse($0) }
+        let blocked = gate("seek completion withheld"), returned = expectation(description: "Play returns before seek completes")
+        let model = try make(http,seek: { _,_ in await blocked.wait() },startupSeekTimeout: 0.1)
+        let start = Task { await model.play(explicit: true); returned.fulfill() }; tasks.append(start)
+        await fulfillment(of: [blocked.started,returned],timeout: 2)
+        XCTAssertFalse(model.isStarting); XCTAssertNil(model.lease); XCTAssertEqual(model.player.rate,0)
+        XCTAssertTrue(model.message.contains("Press Play"))
+        blocked.open(); await start.value
+        XCTAssertFalse(http.requests.contains { $0.httpMethod == "POST" && $0.url?.path == "/api/progress" })
+    }
+
+    func testTerminalItemFailureRebuildsOnlyOnPlayAndUsesTheFreshCheckpoint() async throws {
+        let http = PlaybackHTTP(); http.respond = { try self.defaultResponse($0) }
+        let blocked = gate("first item's startup seek")
+        // A local silent audio asset keeps the real AVPlayerItem alive without
+        // requiring a codec fixture, network source or production account.
+        let asset = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("wav")
+        let byteCount: UInt32 = 8_000 * 2 * 30
+        var wave = Data("RIFF".utf8)
+        func append<T: FixedWidthInteger>(_ number: T) {
+            var little = number.littleEndian
+            withUnsafeBytes(of: &little) { wave.append(contentsOf: $0) }
+        }
+        append(byteCount + 36); wave.append(contentsOf: "WAVEfmt ".utf8)
+        append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(8_000)); append(UInt32(16_000)); append(UInt16(2)); append(UInt16(16))
+        wave.append(contentsOf: "data".utf8); append(byteCount); wave.append(Data(count: Int(byteCount)))
+        try wave.write(to: asset); defer { try? FileManager.default.removeItem(at: asset) }
+        var items: [AVPlayerItem] = [], seeks: [Double] = []
+        let model = try make(http,seek: { _,at in
+            seeks.append(at)
+            if seeks.count == 1 { await blocked.wait() }
+        },itemFactory: { _ in
+            let item = AVPlayerItem(url: asset)
+            items.append(item); return item
+        })
+        let first = Task { await model.play(explicit: true) }; tasks.append(first)
+        await fulfillment(of: [blocked.started],timeout: 2)
+        let failedItem = try XCTUnwrap(items.first)
+        XCTAssertTrue(model.player.currentItem === failedItem)
+        NotificationCenter.default.post(name: .AVPlayerItemFailedToPlayToEndTime,object: failedItem)
+        XCTAssertFalse(model.isStarting); XCTAssertNil(model.lease)
+        await model.foreground()
+        XCTAssertEqual(items.count,1, "A failed item must not silently claim playback on foreground")
+        http.respond = { request in
+            if request.httpMethod == "GET" { return try self.reply(self.snapshot(8,session: "pc-advanced",position: 430)) }
+            if request.url?.path == "/api/playback" {
+                XCTAssertEqual(try self.object(request)["expected_generation"]?.integer,8)
+                return try self.reply(self.snapshot(9,position: 430))
+            }
+            return try self.reply(["ok": .bool(true)])
+        }
+        await model.play(explicit: true)
+        XCTAssertEqual(items.count,2); XCTAssertFalse(model.player.currentItem === failedItem)
+        XCTAssertEqual(seeks,[120,430]); XCTAssertEqual(model.lease?.generation,9)
+        blocked.open(); await first.value
+        NotificationCenter.default.post(name: .AVPlayerItemFailedToPlayToEndTime,object: failedItem)
+        XCTAssertEqual(model.lease?.generation,9, "The old item's late failure cannot release its replacement")
+        XCTAssertFalse(http.requests.contains { $0.httpMethod == "POST" && $0.url?.path == "/api/progress" })
+        await model.close()
     }
 
     func testFixtureAndInvalidIdentityNeverAcquireOrWriteProgress() async throws {

@@ -51,7 +51,8 @@ import Foundation
     private func isHead(_ request: URLRequest) -> Bool {
         URLComponents(url: request.url!,resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "anime_id" }) == true
     }
-    private func make(_ http: AppModelHTTP) throws -> AppModel {
+    private func make(_ http: AppModelHTTP,
+                      recoverConnection: (@MainActor () async throws -> Void)? = nil) throws -> AppModel {
         let name = "qa-ios-app-model-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name)); suites.append((name,defaults))
         let secrets = AppModelSecrets()
@@ -61,7 +62,8 @@ import Foundation
             "deviceID": .string("ios-app-model-fixture")
         ] as JSONObject)
         let fixture = QAFixture(arguments: ["--qa-fixture","--qa-tv-unpaired"]); fixtures.append(fixture)
-        let model = AppModel(sync: SyncService(transport: http,secrets: secrets,preferences: defaults),tv: fixture.makeTV(),fixture: true)
+        let model = AppModel(sync: SyncService(transport: http,secrets: secrets,preferences: defaults),
+                             tv: fixture.makeTV(),fixture: true,recoverConnection: recoverConnection)
         models.append(model)
         return model
     }
@@ -117,6 +119,68 @@ import Foundation
         XCTAssertEqual(model.route.section,"Anime Sync")
         XCTAssertNotNil(model.message)
         XCTAssertFalse(model.provider.currentURL.path.hasPrefix("/watch/"))
+    }
+
+    func testForegroundRestoresConnectionBeforeReloadingFailedHome() async throws {
+        var events: [String] = []
+        let http = AppModelHTTP(), model = try make(http) { events.append("restore") }
+        model.provider.onFixtureBrowse = { _,_ in events.append("browse") }
+        await model.background()
+        model.provider.webView(model.provider.webView,didFailProvisionalNavigation: nil,
+                               withError: URLError(.networkConnectionLost))
+        XCTAssertNotNil(model.provider.error)
+
+        await model.foreground()
+
+        XCTAssertEqual(events,["restore","browse"])
+        XCTAssertEqual(model.route,.home)
+        XCTAssertNil(model.provider.error)
+        XCTAssertTrue(http.requests.isEmpty)
+    }
+
+    func testRetryRefreshesLibraryAfterConnectionRecovers() async throws {
+        let http = AppModelHTTP()
+        var restored = false
+        let model = try make(http) { restored = true }
+        http.respond = { _ in try self.reply(self.history("6")) }
+        _ = await model.sync.refreshHistory()
+        model.navigate("Anime Sync")
+        http.respond = { request in
+            guard restored else { throw URLError(.networkConnectionLost) }
+            return try self.reply(self.isHead(request) ? self.head() : self.history())
+        }
+        await model.openLibraryCard(try card())
+        XCTAssertNotNil(model.message)
+        XCTAssertEqual(model.sync.history.continuing.first?.episode,"6")
+
+        await model.retryConnection()
+
+        XCTAssertEqual(model.sync.history.continuing.first?.episode,"8")
+        XCTAssertNil(model.message)
+        XCTAssertEqual(model.route.section,"Anime Sync")
+        await model.openLibraryCard(try card())
+        XCTAssertEqual(model.route.url?.fragment,"anime-sync-id=21&anime-sync-ep=8")
+        XCTAssertTrue(http.requests.allSatisfy { $0.httpMethod == "GET" })
+    }
+
+    func testPlayWithSavedProgressWaitsForFreshPositionAfterConnectionLoss() async throws {
+        let http = AppModelHTTP(), model = try make(http)
+        http.respond = { _ in try self.reply(self.history("6")) }
+        _ = await model.sync.refreshHistory()
+        let url = URL(string: "https://miruro.cx/watch/21/fixture-21?ep=6")!
+        model.open(url)
+        model.provider.receiveFixture(["type": .string("metadata"),"metadata": .object(AnimeMetadata(animeID: "21",episode: "6",title: "One Piece",watchURL: url).json)])
+        model.provider.receiveFixture(["type": .string("source"),"url": .string("https://cdn.example/fixture.mp4"),"confirmed": .bool(true)])
+        http.respond = { _ in throw URLError(.networkConnectionLost) }
+
+        await model.playHere()
+
+        XCTAssertNil(model.player)
+        XCTAssertTrue(model.message?.contains("saved position") == true)
+        http.respond = { _ in try self.reply(self.head(episode: "6")) }
+        await model.playHere()
+        XCTAssertNotNil(model.player)
+        XCTAssertTrue(http.requests.allSatisfy { $0.httpMethod == "GET" })
     }
 
     func testLibraryContinueCanOpenASeriesOutsideHomeAndWithAnEarlyCheckpoint() async throws {
