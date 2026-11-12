@@ -295,6 +295,12 @@ struct TakeoverRequest: Identifiable {
         clearSelection(); clearBrowser()
         provider.selectEpisode(id: id)
     }
+    func selectSeason(id: String) {
+        guard active, !handingOff, player == nil, route.section == "Episode", !route.website,
+              let season = provider.seasons.first(where: { $0.id == id && !$0.selected }) else { return }
+        message = nil
+        open(season.url)
+    }
     func launchIfReady() {
         guard active, pendingPlay, player == nil, !waitingForPlayerDismissal, launchTask == nil, let metadata = provider.metadata else { return }
         if let target = pendingNextIdentity, target.anime != metadata.animeID || target.episode != Double(metadata.episode) {

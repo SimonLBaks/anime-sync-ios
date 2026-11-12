@@ -121,6 +121,35 @@ import Foundation
         XCTAssertFalse(model.provider.currentURL.path.hasPrefix("/watch/"))
     }
 
+    func testSeasonSwitchUsesItsOwnWatchRouteAndBackRestoresPreviousEpisode() async throws {
+        let http = AppModelHTTP(), model = try make(http)
+        let current = try XCTUnwrap(URL(string: "https://miruro.cx/watch/first/title?ep=12"))
+        let target = try XCTUnwrap(URL(string: "https://miruro.cx/watch/second/title-2?ep=13"))
+        model.open(current)
+        model.provider.receiveFixture(["type": .string("seasons"),"seasons": .array([
+            .object(["label": .string("Season 1"),"url": .string(current.absoluteString),"selected": .bool(false)]),
+            .object(["label": .string("Part 2"),"url": .string(target.absoluteString + "&source=old#anime-sync-t=900"),"selected": .bool(true)]),
+            .object(["label": .string("Season 3"),"url": .string("https://elsewhere.example/watch/third/title?ep=1")]),
+            .object(["label": .string("Season 4"),"url": .string("https://miruro.cx/watch/fourth/title?ep=1&ep=2")]),
+            .object(["label": .string("Duplicate"),"url": .string("https://miruro.cx/watch/second/title-2?ep=1")])
+        ])])
+        XCTAssertEqual(model.provider.seasons.map(\.label),["Season 1","Part 2"])
+        XCTAssertEqual(model.provider.seasons.map(\.selected),[true,false])
+        model.selectSeason(id: "first")
+        XCTAssertEqual(model.route.url,current)
+
+        model.selectSeason(id: "second")
+
+        XCTAssertEqual(model.route.url,target)
+        XCTAssertEqual(model.provider.currentURL,target)
+        XCTAssertTrue(model.provider.seasons.isEmpty)
+        XCTAssertNil(model.player)
+        XCTAssertTrue(http.requests.isEmpty,"Browsing seasons must not claim or write playback")
+        await model.back()
+        XCTAssertEqual(model.route.url,current)
+        XCTAssertEqual(model.provider.currentURL,current)
+    }
+
     func testForegroundRestoresConnectionBeforeReloadingFailedHome() async throws {
         var events: [String] = []
         let http = AppModelHTTP(), model = try make(http) { events.append("restore") }

@@ -38,6 +38,44 @@ struct CatalogueHero: Equatable {
                   meta: String((json["meta"]?.string ?? "").prefix(500)), url: json["url"]?.string.flatMap(URL.init(string:)).flatMap { AppWebPolicy.isProvider($0) ? $0 : nil })
     }
 }
+struct SeasonChoice: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let title: String
+    let year: String
+    let posterURL: URL?
+    let url: URL
+    let selected: Bool
+
+    init?(json: JSONObject, page: URL) {
+        guard let raw = json["url"]?.string, raw.count <= 2048, let target = URL(string: raw),
+              let normalized = ProviderPolicy.documentURL(target,native: true),
+              AppWebPolicy.origin(normalized) == AppWebPolicy.origin(page),
+              let currentID = Self.watchID(page), let targetID = Self.watchID(normalized),
+              var parts = URLComponents(url: normalized,resolvingAgainstBaseURL: false),
+              let label = json["label"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty else { return nil }
+        let episode = (parts.queryItems ?? []).filter { $0.name == "ep" }
+        guard episode.isEmpty || (episode.count == 1 && AppWebPolicy.identity(animeID: "1",episode: episode[0].value ?? "")) else { return nil }
+        parts.queryItems = episode.isEmpty ? nil : episode
+        parts.fragment = nil
+        guard let url = parts.url else { return nil }
+        self.id = targetID
+        self.label = String(label.prefix(80))
+        self.title = String((json["title"]?.string ?? "").prefix(240))
+        let year = json["year"]?.string ?? ""
+        self.year = year.range(of: #"^[0-9]{4}$"#,options: .regularExpression) == nil ? "" : year
+        self.posterURL = ProviderPolicy.imageURL(json["poster"]?.string)
+        self.url = url
+        self.selected = currentID == targetID
+    }
+
+    private static func watchID(_ url: URL) -> String? {
+        let path = url.path.split(separator: "/")
+        guard (2...3).contains(path.count), path[0] == "watch",
+              path[1].range(of: #"^[A-Za-z0-9_-]{1,160}$"#,options: .regularExpression) != nil else { return nil }
+        return String(path[1])
+    }
+}
 struct EpisodeChoice: Identifiable, Equatable {
     var id: String
     var label: String

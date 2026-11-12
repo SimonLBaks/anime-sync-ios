@@ -467,6 +467,9 @@ struct EpisodeScreen: View {
                     }.buttonStyle(.bordered).accessibilityIdentifier("destination.tv")
                     websiteFallback
                     MiruroSourceControls(model: model)
+                    if !model.provider.seasons.isEmpty {
+                        seasons(model.provider.seasons)
+                    }
                     if !model.provider.episodes.isEmpty {
                         EpisodeWindow(episodes: EpisodePresentation.ordered(model.provider.episodes),currentNumber: metadata.episode,
                                       complete: model.provider.episodeInventoryComplete,height: episodeHeight,select: { model.selectEpisode(id: $0) },
@@ -482,6 +485,37 @@ struct EpisodeScreen: View {
     }
     private var websiteFallback: some View {
         Button("Use website player") { model.website() }.buttonStyle(.bordered).padding(.vertical,4).accessibilityIdentifier("destination.website")
+    }
+    private func seasons(_ choices: [SeasonChoice]) -> some View {
+        VStack(alignment: .leading,spacing: 10) {
+            Text("Seasons").font(.headline)
+            ScrollView(.horizontal) {
+                HStack(spacing: 10) {
+                    ForEach(choices) { choice in
+                        Button { model.selectSeason(id: choice.id) } label: {
+                            ZStack(alignment: .bottomLeading) {
+                                Theme.surface
+                                AsyncImage(url: model.fixture ? nil : choice.posterURL) { image in
+                                    image.resizable().scaledToFill()
+                                } placeholder: { Color.clear }
+                                    .frame(width: 164,height: 96).clipped()
+                                LinearGradient(colors: [.clear,.black.opacity(0.87)],startPoint: .top,endPoint: .bottom)
+                                VStack(alignment: .leading,spacing: 4) {
+                                    if choice.selected { Text("Current").font(.caption2.bold()).foregroundStyle(Theme.accent) }
+                                    Text(choice.label).font(.subheadline.bold()).lineLimit(2)
+                                    if !choice.year.isEmpty { Text(choice.year).font(.caption) }
+                                }.padding(10)
+                            }.frame(width: 164,height: 96).clipShape(.rect(cornerRadius: 12))
+                                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(choice.selected ? Theme.accent : .white.opacity(0.18)) }
+                        }.buttonStyle(.plain).foregroundStyle(.white).disabled(choice.selected)
+                            .accessibilityLabel(choice.title.isEmpty || choice.title == choice.label ? choice.label : "\(choice.label), \(choice.title)")
+                            .accessibilityValue([choice.year,choice.selected ? "Current" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
+                            .accessibilityAddTraits(choice.selected ? .isSelected : [])
+                            .accessibilityIdentifier("season.choice." + choice.id)
+                    }
+                }
+            }.scrollIndicators(.hidden).keepHorizontalGesture()
+        }.accessibilityIdentifier("seasons.choices")
     }
 }
 struct AppSettings: View {

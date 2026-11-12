@@ -112,6 +112,56 @@
     const payload={type:'catalogue',groups,loading,message,page:location.href};
     const signature=JSON.stringify(payload);if(signature!==catalogueSignature){catalogueSignature=signature;send(payload);}
   }
+  let seasonSignature='';
+  function watchSeasonID(url){
+    return url.pathname.match(/^\/watch\/([A-Za-z0-9_-]{1,160})\/[^/]{1,240}\/?$/)?.[1]||'';
+  }
+  function seasonChoices(){
+    if(!nativeMode||!metadata)return;
+    const page=new URL(location.href),currentID=watchSeasonID(page);
+    if(!currentID)return;
+    let seasons=[];
+    for(const section of document.querySelectorAll('section[aria-label="Seasons"]')){
+      if(section.getAttribute('aria-busy')==='true')continue;
+      const choices=new Map();
+      let inconsistent=false;
+      for(const card of [...section.querySelectorAll('a[href][aria-label]')].slice(0,64)){
+        const label=card.getAttribute('aria-label').trim().match(/^Watch\s+(.+)$/i)?.[1].replace(/\s+/g,' ');
+        if(!label||label.length>80)continue;
+        let url;
+        try{url=new URL(card.getAttribute('href'),page);}catch{continue;}
+        const routeID=watchSeasonID(url);
+        if(!routeID||url.protocol!=='https:'||url.origin!==page.origin||url.username||url.password)continue;
+        const episode=url.searchParams.getAll('ep');
+        if(episode.length>1||episode.length&&!/^\d{1,5}(?:\.\d{1,3})?$/.test(episode[0]))continue;
+        url.search=episode.length?new URLSearchParams({ep:episode[0]}).toString():'';
+        url.hash='';
+        const selected=routeID===currentID;
+        if(card.getAttribute('aria-current')==='page'&&!selected){inconsistent=true;break;}
+        const image=card.querySelector('img'),source=image?.currentSrc||image?.getAttribute('src');
+        let poster='',id='';
+        if(source){
+          try{
+            const artwork=new URL(source,page);
+            if(artwork.protocol==='https:'&&!artwork.username&&!artwork.password){
+              poster=artwork.href;
+              if(artwork.hostname.endsWith('.anilist.co'))id=idFromPoster({src:poster});
+            }
+          }catch{}
+        }
+        const year=[...card.querySelectorAll('*')].map(el=>!el.childElementCount?el.textContent.trim():'').find(value=>/^\d{4}$/.test(value))||'';
+        const title=(card.getAttribute('title')||'').trim().slice(0,240);
+        const existing=choices.get(routeID);
+        if(existing&&existing.url!==url.href){inconsistent=true;break;}
+        if(!existing)choices.set(routeID,{id,label,title,year,poster,url:url.href,selected});
+      }
+      // During SPA navigation, the previous page's panel may still be present.
+      // Its cards are only useful if the current watch entry belongs to the group.
+      if(!inconsistent&&choices.has(currentID)&&choices.size>1&&choices.size<=32){seasons=[...choices.values()];break;}
+    }
+    const signature=JSON.stringify([page.href,seasons]);
+    if(signature!==seasonSignature){seasonSignature=signature;send({type:'seasons',seasons});}
+  }
   let episodeSignature='',serializedEpisodes=[],episodeVersion=0,lastEpisodeVersion='';
   const episodeScripts=new WeakSet();
   function readSerializedEpisodes(){
@@ -218,7 +268,7 @@
     if(route!==location.href){resumeEpoch++;resuming=false;if(!nativeMode)pausedForNative=false;route=location.href;metadata=null;restored=false;observed.clear();customState=new WeakMap();send({type:'route',url:route});}
     resolveSearch();const next=pageData();
     if(next){metadata=next;send({type:'metadata',metadata});}
-    catalogue();episodes();if(nativeMode&&metadata&&!sourceOptionsLoaded&&document.querySelector('button[aria-label="Provider"]')){sourceOptionsLoaded=true;collectSourceChoices();}
+    catalogue();episodes();seasonChoices();if(nativeMode&&metadata&&!sourceOptionsLoaded&&document.querySelector('button[aria-label="Provider"]')){sourceOptionsLoaded=true;collectSourceChoices();}
     if(metadata&&!window.AnimeSyncMediaSelection?.())for(const root of roots())for(const el of root.querySelectorAll('video,source,track')){
       if(el.tagName==='TRACK'&&el.kind!=='subtitles'&&el.kind!=='captions')continue;
       const url=el.currentSrc||el.src;if(!url||!url.startsWith('https://'))continue;

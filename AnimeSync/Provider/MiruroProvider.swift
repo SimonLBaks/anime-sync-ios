@@ -7,6 +7,7 @@ import WebKit
     @Published private(set) var groups: [CatalogueGroup] = []
     @Published private(set) var hero: CatalogueHero?
     @Published private(set) var metadata: AnimeMetadata?
+    @Published private(set) var seasons: [SeasonChoice] = []
     @Published private(set) var episodes: [EpisodeChoice] = []
     @Published private(set) var episodeInventoryComplete = false
     @Published private(set) var sourceChoices: [WebsiteSourceChoice] = []
@@ -122,7 +123,7 @@ import WebKit
         navigationEpoch &+= 1; let epoch = navigationEpoch
         documentNonce = UUID().uuidString
         currentURL = url; websiteMode = !native; loading = true; error = nil
-        groups = []; hero = nil; metadata = nil; episodes = []; sources = []; unsupportedSources = []; subtitles = []
+        groups = []; hero = nil; metadata = nil; seasons = []; episodes = []; sources = []; unsupportedSources = []; subtitles = []
         episodeInventoryComplete = false; sourceChoices = []; sourceChoicesLoading = false
         selectedChoiceID = ""; selectionToken = ""; selectionRevision &+= 1
         lastSessionID = ""; lastSessionRevision = nil; sessionChanging = false
@@ -252,6 +253,7 @@ import WebKit
     func stop() {
         loadTask?.cancel(); cancelHandoff(ProviderFailure.staleNavigation)
         cancelSourceProbes()
+        seasons = []
         navigationEpoch &+= 1; documentNonce = UUID().uuidString; loading = false
         if !fixture { clearingDocument = true; webView.stopLoading(); webView.loadHTMLString("", baseURL: nil) }
     }
@@ -332,6 +334,16 @@ import WebKit
                   withoutFragment(next.watchURL) == withoutFragment(currentURL) else { return }
             if metadata != next { metadata = next }; if loading { loading = false }
             if sources.isEmpty, sourceStatus == .loadingPlayer { sourceStatus = .waitingForStream }
+        case "seasons":
+            guard !websiteMode, section == "Episode", let items = packet["seasons"]?.array else { return }
+            var seen = Set<String>()
+            let choices = items.prefix(32).compactMap { value -> SeasonChoice? in
+                guard let item = value.object, let choice = SeasonChoice(json: item,page: currentURL),
+                      seen.insert(choice.id).inserted else { return nil }
+                return choice
+            }
+            let available = choices.contains(where: { !$0.selected }) ? choices : []
+            if seasons != available { seasons = available }
         case "episodes":
             var seenEpisodes: Set<Double> = [], seenIDs: Set<String> = []
             let next: [EpisodeChoice] = (packet["episodes"]?.array ?? []).prefix(3000).compactMap { value in
@@ -494,7 +506,7 @@ import WebKit
         cancelHandoff(ProviderFailure.staleNavigation)
         cancelSourceProbes()
         documentNonce = UUID().uuidString; currentURL = url; metadata = nil; sources = []; subtitles = []; unsupportedSources = []
-        episodes = []; episodeInventoryComplete = false; sourceChoices = []; sourceChoicesLoading = false
+        seasons = []; episodes = []; episodeInventoryComplete = false; sourceChoices = []; sourceChoicesLoading = false
         selectedChoiceID = ""; selectionToken = ""; selectionRevision &+= 1
         lastSessionID = ""; lastSessionRevision = nil; sessionChanging = false
         installScripts(); decisionHandler(.allow)

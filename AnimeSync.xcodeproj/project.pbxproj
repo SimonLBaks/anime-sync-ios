@@ -283,8 +283,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "27";
-                MARKETING_VERSION = "0.1.25";
+                CURRENT_PROJECT_VERSION = "28";
+                MARKETING_VERSION = "0.1.26";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -340,8 +340,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "27";
-                MARKETING_VERSION = "0.1.25";
+                CURRENT_PROJECT_VERSION = "28";
+                MARKETING_VERSION = "0.1.26";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -364,8 +364,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "27";
-                MARKETING_VERSION = "0.1.25";
+                CURRENT_PROJECT_VERSION = "28";
+                MARKETING_VERSION = "0.1.26";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -474,8 +474,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "27";
-                MARKETING_VERSION = "0.1.25";
+                CURRENT_PROJECT_VERSION = "28";
+                MARKETING_VERSION = "0.1.26";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -628,8 +628,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "27";
-                MARKETING_VERSION = "0.1.25";
+                CURRENT_PROJECT_VERSION = "28";
+                MARKETING_VERSION = "0.1.26";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
@@ -679,8 +679,8 @@
             isa = XCBuildConfiguration;
             buildSettings = {
                 CODE_SIGN_STYLE = "Automatic";
-                CURRENT_PROJECT_VERSION = "27";
-                MARKETING_VERSION = "0.1.25";
+                CURRENT_PROJECT_VERSION = "28";
+                MARKETING_VERSION = "0.1.26";
                 PRODUCT_NAME = "$(TARGET_NAME)";
                 SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
                 TARGETED_DEVICE_FAMILY = "1";
