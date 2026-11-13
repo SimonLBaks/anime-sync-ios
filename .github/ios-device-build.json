@@ -1,5 +1,5 @@
 {
-  "version": "0.1.28",
-  "build": 30,
-  "reason": "Build 0.1.28 and verify Miruro-ranked suggestions, quoted titles, and View All."
+  "version": "0.1.29",
+  "build": 31,
+  "reason": "Build 0.1.29 and verify complete Miruro suggestion metadata and View All."
 }

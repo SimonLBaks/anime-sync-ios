@@ -123,29 +123,42 @@
   }
   let suggestionSignature='';
   const searchBootstrap=new WeakMap();
+  const searchFields={
+    format:/^(?:TV(?:[ _]SHORT)?|OVA|ONA|MOVIE|SPECIAL|MUSIC)$/,
+    season_year:/^[12]\d{3}$/,
+    episode_count:/^[1-9]\d{0,4}$/,
+    average_score:/^(?:[1-9]?\d(?:\.\d{1,2})?|100(?:\.0{1,2})?)$/
+  };
   function searchResultMetadata(ids){
     const matches=new Map();
     for(const script of [...document.scripts].slice(0,80)){
-      let entries=searchBootstrap.get(script);
-      if(!entries){
-        entries=new Map();searchBootstrap.set(script,entries);
-        const text=script.textContent||'';
-        if(text.length>2000000||!text.includes('node_ids:')||!text.includes('average_score:'))continue;
+      const text=script.textContent||'';
+      if(text.length>2000000||!text.includes('node_ids:')||!text.includes('average_score:'))continue;
+      let cached=searchBootstrap.get(script);
+      if(cached?.text!==text){
+        cached={text,entries:new Map()};searchBootstrap.set(script,cached);
         // The visible grid owns ranking and navigation. Read only display fields
         // from its public bootstrap rows, without executing the source script.
         for(const row of text.matchAll(/\{\s*id\s*:\s*"([A-Za-z0-9_-]{1,160})"\s*,/g)){
           const fields=/\b(format|season_year|episode_count|average_score)\s*:\s*("[A-Z0-9_ ]{1,24}"|\d{1,5}(?:\.\d{1,2})?|null)|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|[{}\[\]()]/g;
           fields.lastIndex=row.index+row[0].length;
-          const values={};let depth=1;
+          const values={...cached.entries.get(row[1])};let depth=1;
           for(let field;(field=fields.exec(text));){
-            if(field[1]){if(depth===1)values[field[1]]=field[2].replace(/^"|"$/g,'');continue;}
+            if(field[1]){
+              const value=field[2].replace(/^"|"$/g,'');
+              if(depth===1&&searchFields[field[1]].test(value))values[field[1]]=value;
+              continue;
+            }
             if('{[('.includes(field[0]))depth++;
             if('}])'.includes(field[0])&&!--depth)break;
           }
-          if(Object.keys(values).length)entries.set(row[1],values);
+          if(Object.keys(values).length)cached.entries.set(row[1],values);
         }
       }
-      for(const id of ids)if(entries.has(id))matches.set(id,entries.get(id));
+      for(const id of ids){
+        const values=cached.entries.get(id);
+        if(values)matches.set(id,{...matches.get(id),...values});
+      }
     }
     return matches;
   }
@@ -175,15 +188,15 @@
       cards.set(route[1],{anchor,title,poster,url:url.href});
       if(cards.size===6)break;
     }
-    const metadata=cards.size?searchResultMetadata(cards.keys()):new Map();
+    const metadata=cards.size?searchResultMetadata([...cards.keys()]):new Map();
     const items=[...cards].map(([id,{anchor,title,poster,url}])=>{
       const fields=metadata.get(id)||{};
       const spans=[...anchor.querySelectorAll('span')].map(el=>el.textContent.trim());
-      const year=/^[12]\d{3}$/.test(fields.season_year)?fields.season_year:spans.find(text=>/^[12]\d{3}$/.test(text))||'';
+      const year=fields.season_year||spans.find(text=>searchFields.season_year.test(text))||'';
       const type=fields.format||spans.find(text=>/^(?:TV(?: short)?|OVA|ONA|Movie|Special|Music)$/i.test(text))||'';
       const format=/^(?:TV(?:[ _]SHORT)?|OVA|ONA|MOVIE|SPECIAL|MUSIC)$/i.test(type)?type.replace(/_/g,' ').toUpperCase():'';
-      const episode_count=/^[1-9]\d{0,4}$/.test(fields.episode_count)?fields.episode_count:'';
-      const score=/^\d{1,3}(?:\.\d{1,2})?$/.test(fields.average_score)&&Number(fields.average_score)<=100?String(Math.round(Number(fields.average_score))):'';
+      const episode_count=fields.episode_count||'';
+      const score=fields.average_score===undefined?'':String(Math.round(Number(fields.average_score)));
       return {title,poster,url,year,format,episode_count,score};
     });
     const empty=current&&paragraphs.some(p=>p.textContent.trim()==='No matching titles');
