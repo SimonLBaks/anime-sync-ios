@@ -397,9 +397,33 @@ struct TakeoverRequest: Identifiable {
         pendingPlay = false; pendingNextIdentity = nil; message = nil; clearBrowser()
         let identity = fixture ? AnimeMetadata(animeID: "",episode: "",title: metadata.title,watchURL: metadata.watchURL) : metadata
         let model = NativePlaybackModel(metadata: identity,source: source,subtitles: provider.subtitles,sync: sync,fixture: fixture,position: pendingResume?.position,generation: pendingResume?.generation ?? pendingSourceGeneration)
+        if !fixture, metadata.isValid {
+            let playbackAccount = sync.accountGeneration
+            var choices = provider.sourceChoices.filter(\.selected)
+            model.refreshSource = { [weak self,weak model] source in
+                guard let self, let model, self.active, self.player === model,
+                      self.sync.accountGeneration == playbackAccount else { throw ProviderFailure.staleNavigation }
+                let navigation = self.resolvingEpoch, scene = self.sceneGeneration
+                if self.provider.selectionRevision == source.selectionRevision,
+                   self.provider.selectedChoiceID == source.choiceID {
+                    let selected = self.provider.sourceChoices.filter(\.selected)
+                    if selected.contains(where: { $0.kind == "audio" }) && selected.contains(where: { $0.kind == "provider" }) {
+                        choices = selected
+                    }
+                }
+                let refreshed = try await self.provider.refreshNativeMedia(metadata: metadata,source: source,websiteChoices: choices)
+                guard self.active, self.player === model, self.resolvingEpoch == navigation,
+                      self.sceneGeneration == scene, self.sync.accountGeneration == playbackAccount,
+                      !Task.isCancelled else { throw ProviderFailure.staleNavigation }
+                choices = self.provider.sourceChoices.filter(\.selected)
+                self.nativeSubtitleContext = (model.id,navigation,playbackAccount,refreshed.source.selectionRevision)
+                return refreshed
+            }
+        }
         model.nextEpisode = EpisodeChoice.next(in: provider.episodes,after: metadata)
         model.resolveNextEpisode = { [weak self,weak model] episodes in
-            guard let self, let model, self.player === model, self.provider.metadata == metadata else { return nil }
+            guard let self, let model, self.player === model, let current = self.provider.metadata,
+                  current.animeID == metadata.animeID, current.episode == metadata.episode else { return nil }
             return EpisodeChoice.next(in: episodes,after: metadata)
         }
         model.onNextEpisode = { [weak self,weak model] episode,generation in
@@ -435,7 +459,8 @@ struct TakeoverRequest: Identifiable {
         guard active, let player, let context = nativeSubtitleContext,
               context.player == player.id, context.navigation == resolvingEpoch,
               context.account == sync.accountGeneration, context.source == provider.selectionRevision,
-              provider.metadata == player.metadata else { return }
+              let current = provider.metadata, current.animeID == player.metadata.animeID,
+              current.episode == player.metadata.episode else { return }
         player.updateSubtitles(sources.filter { $0.selectionRevision == context.source && $0.choiceID == player.source.choiceID })
     }
     func playerCoverDismissed() async {

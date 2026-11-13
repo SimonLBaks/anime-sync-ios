@@ -1,5 +1,5 @@
 {
-  "version": "0.1.29",
-  "build": 31,
-  "reason": "Build 0.1.29 and verify complete Miruro suggestion metadata and View All."
+  "version": "0.1.30",
+  "build": 32,
+  "reason": "Build 0.1.30 and verify native playback source recovery after iPhone lock."
 }

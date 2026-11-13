@@ -117,7 +117,8 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
 @MainActor final class NativePlaybackModel: ObservableObject, Identifiable {
     let id = UUID()
     let metadata: AnimeMetadata
-    let source: MediaSource
+    private(set) var source: MediaSource
+    var refreshSource: ((MediaSource) async throws -> (source: MediaSource, subtitles: [SubtitleSource]))?
     @Published private(set) var subtitles: [SubtitleSource] = []
     let player = AVPlayer()
     let sync: SyncService
@@ -140,6 +141,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     private var audioGroup: AVMediaSelectionGroup?
     static let playbackSpeeds: [Float] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]
     @Published var isStarting = false
+    @Published private(set) var wantsPlayback = false
     @Published private(set) var isSeeking = false
     @Published private(set) var handoffInProgress = false
     @Published private(set) var activeSegment: PlaybackSegment?
@@ -170,8 +172,11 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     private var emptySubtitleRequests: [SubtitleRequestIdentity] = []
     private var startTask: Task<Void,Never>?
     private var claimTask: Task<PlaybackStart,Error>?
+    private var sourceRefreshTask: Task<(source: MediaSource, subtitles: [SubtitleSource]),Error>?
+    private var pauseSave: (epoch: UInt64, task: Task<Void,Never>)?
     private var pendingGeneration: Int64?
     private var explicitPosition: TimeInterval?
+    private var reconnectCheckpoint: (account: UInt64, position: TimeInterval)?
     private let clock: (() -> (position: TimeInterval, duration: TimeInterval))?
     private let seekOperation: ((AVPlayer, TimeInterval) async -> Void)?
     private var resumeOnForeground = false
@@ -250,6 +255,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             guard !self.disposed, !self.closing, self.startingEpoch == epoch,
                   self.player.currentItem === item, self.lease === captured, self.player.rate == 0 else { return }
             self.finishedGeneration = captured?.isValid == true ? captured?.generation : nil
+            self.wantsPlayback = false
             self.release(); self.refreshSegment(); self.message = "Episode finished"
             if canContinue, captured?.isValid != false { self.nextEpisodePrompt = self.nextEpisode }
         } })
@@ -296,16 +302,18 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     }
     private func playbackFailed(_ item: AVPlayerItem?) {
         guard !disposed, !closing, !itemNeedsReload, let item, player.currentItem === item else { return }
+        rememberReconnectPosition()
         itemNeedsReload = true; videoReady = false
         startingEpoch &+= 1; cancelPendingStart(); isStarting = false
         cancelControlSeek()
-        resumeOnForeground = false; pendingGeneration = nil; explicitPosition = nil
+        wantsPlayback = false; resumeOnForeground = false; pendingGeneration = nil; explicitPosition = nil
         restoring = true; player.pause(); restoring = false; release()
         message = "The connection to this source stopped. Press Play to retry, or choose another source."
     }
     private func cancelPendingStart() {
         startTask?.cancel(); startTask = nil
         claimTask?.cancel(); claimTask = nil
+        sourceRefreshTask?.cancel(); sourceRefreshTask = nil
         startupSeek?.finish(false); startupSeek = nil
     }
     private func seekForStart(to position: TimeInterval) async -> Bool {
@@ -386,20 +394,67 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
         if rate > 0, lease == nil, !localOnly {
             restoring = true; player.pause(); restoring = false
             startTask?.cancel(); startTask = Task { [weak self] in await self?.play(explicit: true) }
-        } else if rate == 0, !backgrounded, checkpointReady, lease != nil, player.timeControlStatus == .paused {
-            let captured = lease, epoch = startingEpoch
-            Task { [weak self] in
-                guard let self else { return }
-                await self.save()
-                // Play may resume while the save waits for the network. Keep that
-                // active session; its Play event already observed the same lease.
-                if !self.disposed, self.startingEpoch == epoch, self.player.rate == 0,
-                   self.player.timeControlStatus == .paused, self.lease === captured { self.release() }
-            }
+        } else if rate > 0, !backgrounded {
+            wantsPlayback = true
         }
+    }
+    func pause() {
+        guard !disposed, !closing, !isStarting, !backgrounded else { return }
+        wantsPlayback = false
+        player.pause()
+        rememberReconnectPosition()
+        let epoch = startingEpoch, captured = lease
+        guard checkpointReady, pauseSave?.epoch != epoch else { return }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            guard self.startingEpoch == epoch || self.backgrounded && self.lease === captured else { return }
+            await self.save()
+            if self.pauseSave?.epoch == epoch { self.pauseSave = nil }
+            if !self.disposed, !self.backgrounded, self.startingEpoch == epoch, !self.wantsPlayback,
+               self.player.rate == 0, self.player.timeControlStatus == .paused, self.lease === captured { self.release() }
+        }
+        pauseSave = (epoch,task)
+    }
+    private func rememberReconnectPosition() {
+        if refreshSource != nil, checkpointReady, position > 0 {
+            reconnectCheckpoint = (sync.accountGeneration,position)
+        }
+    }
+    private func reloadSource(epoch: UInt64, account: UInt64, allowCachedSource: Bool) async throws {
+        guard let refreshSource else { return }
+        message = "Reconnecting to the selected source…"
+        let current = source
+        let task = Task { try await refreshSource(current) }
+        sourceRefreshTask = task
+        defer { if epoch == startingEpoch { sourceRefreshTask = nil } }
+        let refreshed: (source: MediaSource, subtitles: [SubtitleSource])
+        do {
+            refreshed = try await withTaskCancellationHandler(operation: { try await task.value },onCancel: { task.cancel() })
+        } catch ProviderFailure.staleNavigation {
+            throw ProviderFailure.staleNavigation
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Some watch pages no longer expose the selected source menu.
+            // For the automatic resume, give the existing ticket one try.
+            if allowCachedSource { return }
+            throw error
+        }
+        guard !disposed, !closing, epoch == startingEpoch, account == sync.accountGeneration, !Task.isCancelled else { throw CancellationError() }
+        let priorSubtitle = subtitles.first { $0.id == captionSelection }
+        source = refreshed.source
+        updateSegments(source.segments)
+        updateSubtitles(refreshed.subtitles)
+        if !automaticCaptions, let priorSubtitle,
+           let replacement = subtitles.first(where: { $0.language == priorSubtitle.language && $0.label == priorSubtitle.label }),
+           activeSubtitleRequest != SubtitleRequestIdentity(replacement) { selectSubtitle(replacement) }
     }
     func play(explicit: Bool, expectedGeneration: Int64? = nil) async {
         guard !disposed, !closing, !isStarting, !isSeeking, !handoffInProgress else { return }
+        let intentEpoch = startingEpoch
+        if let pauseSave, pauseSave.epoch == startingEpoch { await pauseSave.task.value }
+        guard !disposed, !closing, !isStarting, !isSeeking, !handoffInProgress,
+              startingEpoch == intentEpoch, !Task.isCancelled else { return }
         nextEpisodePrompt = nil; finishedGeneration = nil; lastPlaybackGeneration = nil
         isStarting = true; startingEpoch &+= 1; let epoch = startingEpoch
         backgrounded = false; resumeOnForeground = false
@@ -413,11 +468,14 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
         defer { if epoch == startingEpoch { claimTask = nil; isStarting = false; restoring = false } }
         restoring = true; player.pause(); restoring = false
         release()
-        let fallbackPosition = position
+        let fallbackPosition = reconnectCheckpoint?.account == account ? reconnectCheckpoint?.position ?? position : position
         do {
             if clock == nil || itemFactory != nil,
                itemNeedsReload || player.currentItem?.status == .failed || player.currentItem == nil {
+                let recovering = itemNeedsReload || player.currentItem?.status == .failed
                 itemNeedsReload = true
+                if recovering { try await reloadSource(epoch: epoch,account: account,allowCachedSource: requiresOwnedResume) }
+                guard !disposed, !closing, epoch == startingEpoch, account == sync.accountGeneration, !Task.isCancelled else { return }
                 try await replacePlaybackItem(epoch: epoch)
                 guard !disposed, !closing, epoch == startingEpoch, !Task.isCancelled else { return }
             }
@@ -451,10 +509,11 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             lastPlaybackGeneration = result.lease?.generation
             if let captured = lease {
                 invalidation = captured.$isValid.sink { [weak self, weak captured] valid in
-                    guard !valid else { return }; Task { @MainActor in guard let self, self.lease === captured else { return }; self.startingEpoch &+= 1; self.cancelPendingStart(); self.isStarting = false; self.restoring = true; self.player.pause(); self.restoring = false; self.release(); self.message = "Playback continued on another device. Press Play to resume here." }
+                    guard !valid else { return }; Task { @MainActor in guard let self, self.lease === captured else { return }; self.startingEpoch &+= 1; self.cancelPendingStart(); self.isStarting = false; self.wantsPlayback = false; self.restoring = true; self.player.pause(); self.restoring = false; self.release(); self.message = "Playback continued on another device. Press Play to resume here." }
                 }
             }
             let at = explicitPosition ?? result.resumePosition ?? fallbackPosition; explicitPosition = nil; pendingGeneration = nil
+            if refreshSource != nil { reconnectCheckpoint = (account,at) }
             restoring = true
             let completed = await seekForStart(to: max(0,at))
             guard !disposed, !closing, epoch == startingEpoch else { return }
@@ -464,8 +523,14 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
                 itemNeedsReload = true; videoReady = false; release()
                 message = "The video connection stalled. Press Play to reconnect, or choose another source."; return
             }
-            checkpointReady = true; player.play(); message = "Playing"
-        } catch { if !disposed, epoch == startingEpoch { message = error.localizedDescription } }
+            reconnectCheckpoint = nil
+            checkpointReady = true; wantsPlayback = true; player.play(); message = "Playing"
+        } catch {
+            guard !disposed, epoch == startingEpoch, !Task.isCancelled else { return }
+            message = itemNeedsReload && refreshSource != nil
+                ? "Could not reconnect to this source. Press Play to try again, or choose another source."
+                : error.localizedDescription
+        }
     }
     func save(ended: Bool = false) async {
         // A claim can finish before AVPlayer's initial seek. An interruption in
@@ -537,14 +602,20 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     func background() async {
         guard !disposed, !closing, !backgrounded else { return }
         backgrounded = true
+        let previousPauseSave = pauseSave?.epoch == startingEpoch ? pauseSave?.task : nil
         cancelControlSeek()
         clearScrubWindow()
-        let wasPlaying = player.rate > 0 || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        let wasPlaying = wantsPlayback
         let ownedGeneration = lease.flatMap { $0.isValid ? $0.generation : nil }
         resumeOnForeground = wasPlaying && ownedGeneration != nil; pendingGeneration = ownedGeneration
+        wantsPlayback = false
+        rememberReconnectPosition()
+        if !fixture, player.currentItem != nil, mediaBridge != nil || itemFactory != nil { itemNeedsReload = true }
         startingEpoch &+= 1; cancelPendingStart(); isStarting = false; explicitPosition = nil
         let epoch = startingEpoch, captured = lease
-        restoring = true; player.pause(); restoring = false; await save()
+        restoring = true; player.pause(); restoring = false
+        if let previousPauseSave { await previousPauseSave.value }
+        else { await save() }
         guard !disposed, !closing, epoch == startingEpoch, lease === captured,
               player.rate == 0 else { return }
         release()
@@ -553,15 +624,12 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     func foreground() async {
         backgrounded = false
         guard resumeOnForeground, !disposed, !closing, let generation = pendingGeneration else { return }; resumeOnForeground = false
-        // An interrupted local media listener can leave an item buffering
-        // without ever reporting .failed. Rebuild it once for the captured
-        // owned continuation; play still validates generation before seeking.
-        if !fixture, player.currentItem != nil, mediaBridge != nil || itemFactory != nil { itemNeedsReload = true }
         await play(explicit: true,expectedGeneration: generation)
     }
     func handoff() async throws -> HandoffSnapshot {
         guard !disposed, !closing, !isSeeking, !handoffInProgress else { throw CoreError.canceled }
         handoffInProgress = true
+        wantsPlayback = false
         clearScrubWindow()
         startingEpoch &+= 1; cancelPendingStart(); isStarting = false; restoring = true; player.pause(); restoring = false
         let epoch = startingEpoch, capturedLease = lease, capturedPosition = position
@@ -1057,13 +1125,13 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
                 .disabled(!model.canSeek)
             Button {
                 onInteraction()
-                if model.player.timeControlStatus != .paused || model.player.rate > 0 { model.player.pause() }
+                if model.wantsPlayback { model.pause() }
                 else { Task { await model.play(explicit: true) } }
             } label: {
-                Image(systemName: playing ? "pause.fill" : "play.fill")
+                Image(systemName: model.wantsPlayback ? "pause.fill" : "play.fill")
                     .font(.system(size: landscape ? 30 : 26,weight: .semibold))
             }.buttonStyle(PlaybackTransportButtonStyle(size: playSize))
-                .accessibilityLabel(playing ? "Pause" : "Play").accessibilityIdentifier("player.play-pause")
+                .accessibilityLabel(model.wantsPlayback ? "Pause" : "Play").accessibilityIdentifier("player.play-pause")
                 .disabled(model.isStarting || model.isSeeking || model.handoffInProgress)
                 #if DEBUG
                 .background {

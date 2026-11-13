@@ -82,6 +82,20 @@ import CoreMedia
         if request.url?.path == "/api/playback" { return try reply(snapshot(2)) }
         return try reply(["ok": .bool(true)])
     }
+    private func silentAudioAsset() throws -> URL {
+        let asset = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("wav")
+        let byteCount: UInt32 = 8_000 * 2 * 30
+        var wave = Data("RIFF".utf8)
+        func append<T: FixedWidthInteger>(_ number: T) {
+            var little = number.littleEndian
+            withUnsafeBytes(of: &little) { wave.append(contentsOf: $0) }
+        }
+        append(byteCount + 36); wave.append(contentsOf: "WAVEfmt ".utf8)
+        append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(8_000)); append(UInt32(16_000)); append(UInt16(2)); append(UInt16(16))
+        wave.append(contentsOf: "data".utf8); append(byteCount); wave.append(Data(count: Int(byteCount)))
+        try wave.write(to: asset)
+        return asset
+    }
     override func tearDown() async throws {
         gates.forEach { $0.open() }
         for task in tasks { await task.value }
@@ -582,7 +596,7 @@ import CoreMedia
         await model.play(explicit: true)
         let lease = try XCTUnwrap(model.lease)
         XCTAssertGreaterThan(model.player.rate, 0, "AVPlayer must hold the actual play intent for this lifecycle fixture")
-        model.player.pause()
+        model.pause()
         await fulfillment(of: [blockedSave.started],timeout: 3)
         model.player.play()
         blockedSave.open()
@@ -729,6 +743,127 @@ import CoreMedia
         XCTAssertEqual(model.lease?.generation,3); XCTAssertGreaterThan(model.player.rate,0)
     }
 
+    func testOwnedForegroundResolvesFreshSourceBeforeRebuildingAtTheSavedCheckpoint() async throws {
+        let http = PlaybackHTTP(), asset = try silentAudioAsset()
+        defer { try? FileManager.default.removeItem(at: asset) }
+        let fresh = MediaSource(url: URL(string: "https://example.invalid/fresh.mp4")!)
+        let checkpoint = 317.25
+        var savedPosition: TimeInterval = 120, position: TimeInterval = 0
+        var generation: Int64 = 1
+        var saved: [JSONObject] = [], refreshed: [URL] = [], itemSources: [URL] = []
+        var seeks: [TimeInterval] = [], playbackSteps: [String] = []
+        http.respond = { request in
+            if request.httpMethod == "GET" { return try self.reply(self.snapshot(generation,position: savedPosition)) }
+            let body = try self.object(request)
+            if request.url?.path == "/api/playback" {
+                XCTAssertEqual(body["expected_generation"]?.integer,generation)
+                generation += 1
+                return try self.reply(self.snapshot(generation,position: savedPosition))
+            }
+            if request.url?.path == "/api/progress" {
+                saved.append(body)
+                savedPosition = try XCTUnwrap(body["current_time"]?.double)
+            }
+            return try self.reply(["ok": .bool(true)])
+        }
+        let model = try make(http,clock: { (position,1000) },seek: { _, target in
+            playbackSteps.append("seek"); seeks.append(target); position = target
+        },itemFactory: { source in
+            playbackSteps.append("item"); itemSources.append(source.url)
+            return AVPlayerItem(url: asset)
+        })
+        let originalSource = model.source.url
+        model.refreshSource = { source in
+            playbackSteps.append("refresh"); refreshed.append(source.url)
+            return (fresh,[])
+        }
+        await model.play(explicit: true)
+        let oldItem = try XCTUnwrap(model.player.currentItem)
+        let oldLease = try XCTUnwrap(model.lease)
+        XCTAssertEqual(oldLease.generation,2)
+        position = checkpoint
+        // The system can pause AVPlayer before the scene reports background.
+        model.player.pause()
+
+        await model.background(); await model.background()
+        await model.foreground(); await model.foreground()
+
+        XCTAssertEqual(playbackSteps,["item","seek","refresh","item","seek"])
+        XCTAssertEqual(refreshed,[originalSource]); XCTAssertEqual(itemSources,[originalSource,fresh.url])
+        XCTAssertFalse(model.player.currentItem === oldItem)
+        XCTAssertEqual(seeks,[120,checkpoint]); XCTAssertEqual(model.lease?.generation,3)
+        XCTAssertEqual(http.requests.filter { $0.url?.path == "/api/playback" }.count,2)
+        XCTAssertEqual(saved.count,1,"One interruption must save the outgoing checkpoint only once")
+        let payload = try XCTUnwrap(saved.first)
+        XCTAssertEqual(payload["current_time"]?.double,checkpoint)
+        XCTAssertEqual(payload["duration"]?.double,1000)
+        XCTAssertEqual(payload["completed"]?.bool,false)
+        XCTAssertEqual(payload["anime_id"]?.string,metadata.animeID)
+        XCTAssertEqual(payload["episode"]?.string,metadata.episode)
+        XCTAssertEqual(payload["playback_session_id"]?.string,oldLease.id)
+        XCTAssertEqual(payload["playback_generation"]?.integer,oldLease.generation)
+        XCTAssertEqual(payload["playback_sequence"]?.integer,1)
+        await model.close()
+    }
+
+    func testManualPauseSurvivesForegroundAndTheNextPlayResolvesFreshSource() async throws {
+        let http = PlaybackHTTP(), asset = try silentAudioAsset()
+        defer { try? FileManager.default.removeItem(at: asset) }
+        let fresh = MediaSource(url: URL(string: "https://example.invalid/fresh-after-pause.mp4")!)
+        let checkpoint = 317.25
+        var itemSources: [URL] = [], refreshed: [URL] = [], seeks: [TimeInterval] = []
+        var position: TimeInterval = 0
+        var generation: Int64 = 1
+        var savedPosition: TimeInterval = 120
+        let pausedSave = gate("Manual pause save is awaiting acknowledgement")
+        let locking = expectation(description: "Background starts before the pause save is acknowledged")
+        var progressWrites = 0
+        http.respond = { request in
+            if request.httpMethod == "GET" { return try self.reply(self.snapshot(generation,position: savedPosition)) }
+            let body = try self.object(request)
+            if request.url?.path == "/api/playback" {
+                XCTAssertEqual(body["expected_generation"]?.integer,generation)
+                generation += 1
+                return try self.reply(self.snapshot(generation,position: savedPosition))
+            }
+            if request.url?.path == "/api/progress" {
+                savedPosition = try XCTUnwrap(body["current_time"]?.double)
+                progressWrites += 1
+                if progressWrites == 1 { await pausedSave.wait() }
+            }
+            return try self.reply(["ok": .bool(true)])
+        }
+        let model = try make(http,clock: { (position,1000) },seek: { _, target in
+            seeks.append(target); position = target
+        },itemFactory: { source in
+            itemSources.append(source.url)
+            return AVPlayerItem(url: asset)
+        })
+        let originalSource = model.source.url
+        model.refreshSource = { source in refreshed.append(source.url); return (fresh,[]) }
+        await model.play(explicit: true)
+        let oldItem = try XCTUnwrap(model.player.currentItem)
+        position = checkpoint
+        model.pause()
+        await fulfillment(of: [pausedSave.started],timeout: 3)
+        let background = Task { locking.fulfill(); await model.background() }; tasks.append(background)
+        await fulfillment(of: [locking],timeout: 3)
+        pausedSave.open(); await background.value
+        await model.sync.flushPending(); await model.foreground()
+
+        XCTAssertEqual(model.player.rate,0); XCTAssertNil(model.lease)
+        XCTAssertTrue(model.player.currentItem === oldItem)
+        XCTAssertTrue(refreshed.isEmpty); XCTAssertEqual(seeks,[120]); XCTAssertEqual(itemSources,[originalSource])
+        XCTAssertEqual(progressWrites,1,"Lock must reuse the pending checkpoint from the manual pause")
+        XCTAssertEqual(http.requests.filter { $0.url?.path == "/api/playback" }.count,1)
+
+        await model.play(explicit: true)
+        XCTAssertEqual(refreshed,[originalSource]); XCTAssertEqual(itemSources,[originalSource,fresh.url])
+        XCTAssertEqual(seeks,[120,checkpoint]); XCTAssertEqual(model.lease?.generation,3)
+        XCTAssertEqual(progressWrites,1,"The replacement item must not write its initial position")
+        await model.close()
+    }
+
     func testOwnedForegroundNetworkFailureWaitsForExplicitFreshPlay() async throws {
         let http = PlaybackHTTP(); http.respond = { try self.defaultResponse($0) }
         var seeks: [Double] = [], position = 120.0
@@ -816,13 +951,33 @@ import CoreMedia
     func testStartupSeekDeadlineReleasesControlsAndTheUnpositionedLease() async throws {
         let http = PlaybackHTTP(); http.respond = { try self.defaultResponse($0) }
         let blocked = gate("seek completion withheld"), returned = expectation(description: "Play returns before seek completes")
-        let model = try make(http,seek: { _,_ in await blocked.wait() },startupSeekTimeout: 0.1)
+        let asset = try silentAudioAsset()
+        defer { try? FileManager.default.removeItem(at: asset) }
+        let fresh = MediaSource(url: URL(string: "https://example.invalid/fresh-after-timeout.mp4")!)
+        var seeks: [TimeInterval] = [], itemSources: [URL] = [], refreshed: [URL] = []
+        let model = try make(http,seek: { _, target in
+            seeks.append(target)
+            if seeks.count == 1 { await blocked.wait() }
+        },startupSeekTimeout: 0.1,itemFactory: { source in
+            itemSources.append(source.url)
+            return AVPlayerItem(url: asset)
+        })
+        let originalSource = model.source.url
+        model.refreshSource = { source in refreshed.append(source.url); return (fresh,[]) }
         let start = Task { await model.play(explicit: true); returned.fulfill() }; tasks.append(start)
         await fulfillment(of: [blocked.started,returned],timeout: 2)
         XCTAssertFalse(model.isStarting); XCTAssertNil(model.lease); XCTAssertEqual(model.player.rate,0)
         XCTAssertTrue(model.message.contains("Press Play"))
         blocked.open(); await start.value
+        XCTAssertTrue(refreshed.isEmpty)
         XCTAssertFalse(http.requests.contains { $0.httpMethod == "POST" && $0.url?.path == "/api/progress" })
+
+        await model.play(explicit: true)
+        XCTAssertFalse(model.isStarting); XCTAssertNotNil(model.lease)
+        XCTAssertEqual(refreshed,[originalSource]); XCTAssertEqual(itemSources,[originalSource,fresh.url])
+        XCTAssertEqual(seeks,[120,120])
+        XCTAssertFalse(http.requests.contains { $0.httpMethod == "POST" && $0.url?.path == "/api/progress" })
+        await model.close()
     }
 
     func testTerminalItemFailureRebuildsOnlyOnPlayAndUsesTheFreshCheckpoint() async throws {
@@ -830,25 +985,21 @@ import CoreMedia
         let blocked = gate("first item's startup seek")
         // A local silent audio asset keeps the real AVPlayerItem alive without
         // requiring a codec fixture, network source or production account.
-        let asset = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("wav")
-        let byteCount: UInt32 = 8_000 * 2 * 30
-        var wave = Data("RIFF".utf8)
-        func append<T: FixedWidthInteger>(_ number: T) {
-            var little = number.littleEndian
-            withUnsafeBytes(of: &little) { wave.append(contentsOf: $0) }
-        }
-        append(byteCount + 36); wave.append(contentsOf: "WAVEfmt ".utf8)
-        append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(8_000)); append(UInt32(16_000)); append(UInt16(2)); append(UInt16(16))
-        wave.append(contentsOf: "data".utf8); append(byteCount); wave.append(Data(count: Int(byteCount)))
-        try wave.write(to: asset); defer { try? FileManager.default.removeItem(at: asset) }
+        let asset = try silentAudioAsset()
+        defer { try? FileManager.default.removeItem(at: asset) }
+        let fresh = MediaSource(url: URL(string: "https://example.invalid/fresh-after-failure.mp4")!)
         var items: [AVPlayerItem] = [], seeks: [Double] = []
+        var itemSources: [URL] = [], refreshed: [URL] = []
         let model = try make(http,seek: { _,at in
             seeks.append(at)
             if seeks.count == 1 { await blocked.wait() }
-        },itemFactory: { _ in
+        },itemFactory: { source in
+            itemSources.append(source.url)
             let item = AVPlayerItem(url: asset)
             items.append(item); return item
         })
+        let originalSource = model.source.url
+        model.refreshSource = { source in refreshed.append(source.url); return (fresh,[]) }
         let first = Task { await model.play(explicit: true) }; tasks.append(first)
         await fulfillment(of: [blocked.started],timeout: 2)
         let failedItem = try XCTUnwrap(items.first)
@@ -857,6 +1008,7 @@ import CoreMedia
         XCTAssertFalse(model.isStarting); XCTAssertNil(model.lease)
         await model.foreground()
         XCTAssertEqual(items.count,1, "A failed item must not silently claim playback on foreground")
+        XCTAssertTrue(refreshed.isEmpty)
         http.respond = { request in
             if request.httpMethod == "GET" { return try self.reply(self.snapshot(8,session: "pc-advanced",position: 430)) }
             if request.url?.path == "/api/playback" {
@@ -867,6 +1019,7 @@ import CoreMedia
         }
         await model.play(explicit: true)
         XCTAssertEqual(items.count,2); XCTAssertFalse(model.player.currentItem === failedItem)
+        XCTAssertEqual(refreshed,[originalSource]); XCTAssertEqual(itemSources,[originalSource,fresh.url])
         XCTAssertEqual(seeks,[120,430]); XCTAssertEqual(model.lease?.generation,9)
         blocked.open(); await first.value
         NotificationCenter.default.post(name: .AVPlayerItemFailedToPlayToEndTime,object: failedItem)

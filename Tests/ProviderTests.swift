@@ -369,6 +369,75 @@ import WebKit
         provider.stop()
     }
 
+    func testRefreshNativeMediaRestoresTheExactChoiceAndReturnsOnlyCurrentCaptions() async throws {
+        let provider = MiruroProvider(fixture: true)
+        let page = URL(string: "https://miruro.cx/watch/fixture/one-piece?ep=2")!
+        let episode = AnimeMetadata(animeID: "21",episode: "2",title: "One Piece",watchURL: page)
+        let oldURL = URL(string: "https://bee.example/old.m3u8")!
+        let newURL = URL(string: "https://bee.example/new.m3u8")!
+        let captionURL = URL(string: "https://bee.example/new.vtt")!
+        let bee = WebsiteSourceChoice(id: "Provider:bee",kind: "provider",label: "bee",selected: true)
+        provider.open(url: page,native: true)
+        let oldSource = MediaSource(url: oldURL,choiceID: bee.id,selectionRevision: provider.selectionRevision)
+        func menu(beeSelected: Bool, token: String? = nil) -> JSONObject {
+            let sun: JSONValue = .object(["id": .string("Provider:sun"),"label": .string("sun"),"selected": .bool(!beeSelected)])
+            let bee: JSONValue = .object(["id": .string("Provider:bee"),"label": .string("bee"),"selected": .bool(beeSelected)])
+            let group: JSONValue = .object(["name": .string("Provider"),"items": .array([sun,bee])])
+            var packet: JSONObject = ["type": .string("source-choices"),"groups": .array([group])]
+            if let token { packet["selection"] = .string(token) }
+            return packet
+        }
+        provider.onFixtureBrowse = { [weak provider] _,url in
+            XCTAssertEqual(url,page)
+            provider?.receiveFixture(["type": .string("metadata"),"metadata": .object(episode.json)])
+            provider?.receiveFixture(menu(beeSelected: false))
+            provider?.receiveFixture(["type": .string("source"),"url": .string("https://sun.example/default.m3u8"),"configured": .bool(true)])
+            provider?.receiveFixture(["type": .string("subtitle"),"url": .string("https://sun.example/default.vtt")])
+        }
+        var selections: [String] = []
+        provider.onFixtureSourceChoice = { [weak provider] id in
+            selections.append(id)
+            provider?.receiveFixture(menu(beeSelected: true,token: "old-token"))
+            XCTAssertEqual(provider?.sourceChoices.first(where: \.selected)?.id,"Provider:sun")
+            provider?.receiveFixture(menu(beeSelected: true))
+            provider?.receiveFixture(["type": .string("source"),"url": .string(oldURL.absoluteString),"selection": .string("old-token")])
+            provider?.receiveFixture(["type": .string("source"),"url": .string(oldURL.absoluteString)])
+            provider?.receiveFixture(["type": .string("source"),"url": .string(newURL.absoluteString),"configured": .bool(true)])
+            provider?.receiveFixture(["type": .string("subtitle"),"url": .string(captionURL.absoluteString)])
+            provider?.receiveFixture(["type": .string("source-session"),"sessionID": .string("bee"),"revision": .integer(2),"status": .string("ready")])
+            return true
+        }
+        let refreshed = try await provider.refreshNativeMedia(metadata: episode,source: oldSource,websiteChoices: [bee])
+        XCTAssertEqual(selections,[bee.id])
+        XCTAssertEqual(refreshed.source.url,newURL)
+        XCTAssertEqual(refreshed.source.selectionRevision,provider.selectionRevision)
+        XCTAssertGreaterThan(refreshed.source.selectionRevision,oldSource.selectionRevision)
+        XCTAssertEqual(refreshed.source.choiceID,bee.id)
+        XCTAssertEqual(refreshed.subtitles.map(\.url),[captionURL])
+        XCTAssertEqual(refreshed.subtitles.first?.selectionRevision,refreshed.source.selectionRevision)
+        provider.stop()
+    }
+
+    func testRefreshNativeMediaRejectsDifferentEpisodeMetadata() async throws {
+        let provider = MiruroProvider(fixture: true)
+        let page = URL(string: "https://miruro.cx/watch/fixture/one-piece?ep=2")!
+        let episode = AnimeMetadata(animeID: "21",episode: "2",title: "One Piece",watchURL: page)
+        let wrongEpisode = AnimeMetadata(animeID: "21",episode: "3",title: "One Piece",watchURL: page)
+        let source = MediaSource(url: URL(string: "https://bee.example/old.m3u8")!)
+        let choice = WebsiteSourceChoice(id: "Provider:bee",kind: "provider",label: "bee",selected: true)
+        provider.open(url: page,native: true)
+        provider.onFixtureBrowse = { [weak provider] _,_ in
+            provider?.receiveFixture(["type": .string("metadata"),"metadata": .object(wrongEpisode.json)])
+        }
+        do {
+            _ = try await provider.refreshNativeMedia(metadata: episode,source: source,websiteChoices: [choice])
+            XCTFail("A fresh stream must match the original episode identity")
+        } catch ProviderFailure.staleNavigation {
+            XCTAssertTrue(provider.sources.isEmpty)
+        }
+        provider.stop()
+    }
+
     func testCompleteNamedEpisodeInventoryKeepsItemsBeyondFirstPageAndValidatesRoutes() {
         let provider = MiruroProvider(fixture: true)
         let page = URL(string: "https://miruro.cx/watch/fixture/one-piece?ep=1000")!

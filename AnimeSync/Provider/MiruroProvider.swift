@@ -49,9 +49,11 @@ import WebKit
     private var sourceProbes: [String: Task<Void,Never>] = [:]
     private var probedSources: Set<String> = []
     private var selectionToken = ""
+    private var sourceChoiceSnapshot: UInt64 = 0
     private var lastSessionID = ""
     private var lastSessionRevision: Int64?
     private var sessionChanging = false
+    private var refreshingNativeMedia = false
     private var handoff: (id: String, nonce: String, continuation: CheckedContinuation<BrowserHandoffSnapshot, Error>)?
 
     private var configuredNative = true
@@ -115,18 +117,19 @@ import WebKit
     func open(url: URL, native: Bool = true, autoplay: Bool = false) {
         loadDocument(url: url, native: native, autoplay: autoplay, keepReloadBudget: false)
     }
-    private func loadDocument(url inputURL: URL, native: Bool, autoplay: Bool = false, keepReloadBudget: Bool) {
+    private func loadDocument(url inputURL: URL, native: Bool, autoplay: Bool = false, keepReloadBudget: Bool, freshMedia: Bool = false) {
         if !keepReloadBudget { nativeReloadCount = 0 }
         guard let url = ProviderPolicy.documentURL(inputURL,native: native) else { error = ProviderFailure.invalidURL.localizedDescription; return }
         cancelHandoff(ProviderFailure.staleNavigation)
         cancelSourceProbes()
-        if configuredNative != native {
+        if configuredNative != native || (freshMedia && !fixture) {
             let previous = webView
             previous.stopLoading(); previous.navigationDelegate = nil; previous.uiDelegate = nil
             previous.configuration.userContentController.removeScriptMessageHandler(forName: "providerControl")
             previous.configuration.userContentController.removeScriptMessageHandler(forName: "providerResource")
             previous.loadHTMLString("",baseURL: nil)
             webView = makeWebView(native: native); configuredNative = native; privacyRulesInstalled = false
+            ownedNavigation = false
         }
         navigationEpoch &+= 1; let epoch = navigationEpoch
         documentNonce = UUID().uuidString
@@ -184,7 +187,8 @@ import WebKit
                     }
                 } else {
                     self.ownedNavigation = true
-                    self.webView.load(URLRequest(url: url))
+                    let cachePolicy: URLRequest.CachePolicy = freshMedia ? .reloadIgnoringLocalCacheData : .useProtocolCachePolicy
+                    self.webView.load(URLRequest(url: url,cachePolicy: cachePolicy))
                 }
             } catch {
                 guard self.navigationEpoch == epoch else { return }
@@ -197,6 +201,106 @@ import WebKit
         if reloadFailed, error != nil { reload() }
     }
     func reload() { open(url: currentURL, native: !websiteMode) }
+
+    /// Resolves a new media ticket from the same watch page and selected website
+    /// menus. The caller must revalidate its player, account and lease after awaiting.
+    /// The returned media and captions share the provider's new selection revision.
+    func refreshNativeMedia(metadata item: AnimeMetadata, source: MediaSource,
+                            websiteChoices: [WebsiteSourceChoice]) async throws -> (source: MediaSource, subtitles: [SubtitleSource]) {
+        try Task.checkCancellation()
+        guard !refreshingNativeMedia, !websiteMode,
+              let watchURL = ProviderPolicy.documentURL(item.watchURL,native: true),
+              item.isValid, watchURL.path.hasPrefix("/watch/"),
+              withoutFragment(currentURL) == withoutFragment(watchURL) else { throw ProviderFailure.staleNavigation }
+
+        let kinds = ["audio", "provider"]
+        func selectedIDs(_ choices: [WebsiteSourceChoice]) -> [String: String]? {
+            var selected: [String: String] = [:]
+            for kind in kinds {
+                let options = choices.filter { $0.kind == kind }
+                if options.isEmpty { continue }
+                let matches = options.filter(\.selected)
+                guard matches.count == 1, let match = matches.first else { return nil }
+                selected[kind] = match.id
+            }
+            return selected
+        }
+        func matchesEpisode(_ candidate: AnimeMetadata) -> Bool {
+            candidate.site == item.site && candidate.animeID == item.animeID && candidate.episode == item.episode &&
+                withoutFragment(candidate.watchURL) == withoutFragment(watchURL)
+        }
+        let canUseCurrentChoices = metadata.map(matchesEpisode) == true &&
+            source.selectionRevision == selectionRevision && source.choiceID == selectedChoiceID && !sourceChoicesLoading
+        let snapshot = websiteChoices.isEmpty ? nil : selectedIDs(websiteChoices)
+        let current = canUseCurrentChoices ? selectedIDs(sourceChoices) : nil
+        let wanted = snapshot ?? current
+        guard let wanted, source.choiceID.isEmpty || wanted.values.contains(source.choiceID) else { throw ProviderFailure.unavailable }
+
+        refreshingNativeMedia = true
+        let initialMenuSnapshot = sourceChoiceSnapshot
+        pause()
+        loadDocument(url: currentURL,native: true,keepReloadBudget: false,freshMedia: true)
+        let nonce = documentNonce
+        defer {
+            if nonce == documentNonce { pause() }
+            refreshingNativeMedia = false
+        }
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(20))
+        var attempted: Set<String> = []
+        var requireNewChoicesAfter: UInt64?
+        var playRequestedAtRevision: UInt64?
+        var defaultChoicesReadyAt: ContinuousClock.Instant?
+        while clock.now < deadline {
+            try Task.checkCancellation()
+            guard nonce == documentNonce, !websiteMode,
+                  withoutFragment(currentURL) == withoutFragment(watchURL) else { throw ProviderFailure.staleNavigation }
+            if error != nil { throw ProviderFailure.unavailable }
+            if let current = metadata {
+                guard matchesEpisode(current) else { throw ProviderFailure.staleNavigation }
+                if defaultChoicesReadyAt == nil { defaultChoicesReadyAt = clock.now.advanced(by: .seconds(2)) }
+                if !sourceChoicesLoading, requireNewChoicesAfter != sourceChoiceSnapshot,
+                   let selected = selectedIDs(sourceChoices) {
+                    if let kind = kinds.first(where: { wanted[$0] != nil && selected[$0] != wanted[$0] }) {
+                        // Metadata can arrive before the first menu inventory.
+                        // In that case wait for the page's menu scan to finish.
+                        if sourceChoiceSnapshot == initialMenuSnapshot {
+                            try await clock.sleep(for: .milliseconds(100))
+                            continue
+                        }
+                        guard let target = sourceChoices.first(where: { $0.kind == kind && $0.id == wanted[kind] }), attempted.insert(kind).inserted else {
+                            throw ProviderFailure.unavailable
+                        }
+                        // The initial acknowledgement only confirms the click. Wait
+                        // for a newer menu snapshot before comparing its selection.
+                        requireNewChoicesAfter = sourceChoiceSnapshot
+                        selectSourceChoice(id: target.id)
+                    } else {
+                        let ready = sources.filter { $0.selectionRevision == selectionRevision && $0.choiceID == selectedChoiceID && MediaBridgePolicy.allows($0.url) }
+                        let configured = ready.filter(\.configured)
+                        let confirmed = ready.filter(\.confirmed)
+                        let fresh = configured.first(where: { $0.url != source.url }) ?? configured.first ?? confirmed.first ?? ready.first
+                        // A page with no source controls does not send a menu
+                        // snapshot. Give controls time to hydrate before using its default.
+                        let defaultReady = defaultChoicesReadyAt.map { clock.now >= $0 } == true
+                        let choicesReady = sourceChoiceSnapshot != initialMenuSnapshot || defaultReady
+                        if choicesReady, !sessionChanging, let fresh {
+                            let tracks = subtitles.filter { $0.selectionRevision == fresh.selectionRevision && $0.choiceID == fresh.choiceID }
+                            return (fresh, tracks)
+                        }
+                        if ready.isEmpty, playRequestedAtRevision != selectionRevision {
+                            playRequestedAtRevision = selectionRevision
+                            browserCommand("play")
+                        }
+                    }
+                }
+            }
+            try await clock.sleep(for: .milliseconds(100))
+        }
+        throw ProviderFailure.timeout
+    }
+
     func selectEpisode(id: String) {
         guard !id.isEmpty, id.count < 80 else { return }
         if fixture { onFixtureEpisode?(id); return }
@@ -418,6 +522,7 @@ import WebKit
             if next != episodes { episodes = next }
             episodeInventoryComplete = packet["complete"]?.bool == true
         case "source-choices":
+            guard selectionToken.isEmpty || packet["selection"]?.string == selectionToken else { return }
             var result: [WebsiteSourceChoice] = []
             for value in (packet["groups"]?.array ?? []).prefix(2) {
                 guard let group = value.object, let name = group["name"]?.string, ["Audio","Provider"].contains(name) else { continue }
@@ -427,8 +532,10 @@ import WebKit
                     result.append(WebsiteSourceChoice(id: id,kind: name.lowercased(),label: String(label.prefix(200)),selected: item["selected"]?.bool == true))
                 }
             }
-            sourceChoices = result; sourceChoicesLoading = false
-        case "source-choices-status": sourceChoicesLoading = packet["loading"]?.bool == true
+            sourceChoices = result; sourceChoiceSnapshot &+= 1; sourceChoicesLoading = false
+        case "source-choices-status":
+            guard selectionToken.isEmpty || packet["selection"]?.string == selectionToken else { return }
+            sourceChoicesLoading = packet["loading"]?.bool == true
         case "source-selected":
             guard packet["selection"]?.string == selectionToken else { return }
             sourceChoicesLoading = false
