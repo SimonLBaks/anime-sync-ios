@@ -1,5 +1,5 @@
 {
-  "version": "0.1.26",
-  "build": 28,
-  "reason": "Build 0.1.26 and verify exact season navigation and playback state isolation."
+  "version": "0.1.27",
+  "build": 29,
+  "reason": "Build 0.1.27 and verify episode synopsis scrolling in portrait and landscape."
 }

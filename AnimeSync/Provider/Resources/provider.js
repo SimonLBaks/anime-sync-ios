@@ -42,6 +42,50 @@
   };
   const players=()=>roots().flatMap(r=>[...r.querySelectorAll('video,strmcx-embed')]);
   const idFromPoster=p=>(p?.currentSrc||p?.src||'').match(/\/anime\/cover\/(?:large|medium)\/[bn]?x?(\d+)(?:[-.])/i)?.[1]||'';
+  let synopsisWatchID='',synopsisScripts=new WeakSet(),bootstrapSynopsis='';
+  function plainSynopsis(value){
+    let text=value;
+    if(/<\/?[a-z][^<>]*>|&(?:#\w+|[a-z]+);/i.test(text)){
+      const template=document.createElement('template');
+      template.innerHTML=text;
+      template.content.querySelectorAll('script,style').forEach(node=>node.remove());
+      template.content.querySelectorAll('br,p,div,li').forEach(node=>node.after('\n'));
+      text=template.content.textContent||'';
+    }
+    return text.replace(/\r\n?/g,'\n').replace(/[^\S\n]+/g,' ').replace(/ *\n */g,'\n')
+      .replace(/\n{3,}/g,'\n\n').trim().slice(0,6000);
+  }
+  function seriesSynopsis(watchID,info){
+    if(!/^[A-Za-z0-9_-]{1,160}$/.test(watchID))return '';
+    if(synopsisWatchID!==watchID){synopsisWatchID=watchID;synopsisScripts=new WeakSet();bootstrapSynopsis='';}
+    if(bootstrapSynopsis)return bootstrapSynopsis;
+    for(const script of [...document.scripts].slice(0,80)){
+      if(synopsisScripts.has(script))continue;
+      synopsisScripts.add(script);
+      const text=script.textContent||'';
+      if(text.length>150000||!text.includes('node_ids:')||!text.includes('description:'))continue;
+      const start=new RegExp('\\bmedia\\s*:\\s*\\{\\s*id\\s*:\\s*"'+watchID+'"').exec(text);
+      if(!start)continue;
+      // Only decode a top-level JSON string on this watch route's media object.
+      // The watch controls show an episode synopsis and other media have their own descriptions.
+      const fields=/\bdescription\s*:\s*("(?:\\[\s\S]|[^"\\])*")|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|[{}\[\]()]/g;
+      let depth=1;
+      for(const field of text.slice(start.index+start[0].length).matchAll(fields)){
+        if(field[1]&&depth===1){
+          try{bootstrapSynopsis=plainSynopsis(JSON.parse(field[1]));}catch{}
+          if(bootstrapSynopsis)return bootstrapSynopsis;
+          break;
+        }
+        if('{[('.includes(field[0]))depth++;
+        if('}])'.includes(field[0])&&!--depth)break;
+      }
+    }
+    for(const link of info){
+      const description=link.closest('div[class*="_txtWrap_"]')?.querySelector(':scope > p[class*="_description_"]');
+      if(description)return plainSynopsis(description.innerText||description.textContent||'');
+    }
+    return '';
+  }
   function pageData(){
     const u=new URL(location.href),parts=u.pathname.split('/').filter(Boolean);
     if(parts[0]!=='watch'||!parts[1]||!parts[2])return null;
@@ -54,9 +98,10 @@
     let id=info.length?(external.size===1?[...external][0]:idFromPoster(poster)):'';
     if(idFromPoster(poster)&&id!==idFromPoster(poster))id='';
     if(!/^\d+$/.test(id))return null;
+    const description=seriesSynopsis(parts[1],info);
     u.hash='';
     return {site:'miruro',anime_id:id,slug:parts[2],episode,title:info.find(a=>a.closest('h1,h2,h3')||a.classList.contains('watch-anime-title'))?.textContent.trim()||poster?.alt||document.title,
-      watch_url:u.href,poster_url:poster?.currentSrc||poster?.src||''};
+      watch_url:u.href,poster_url:poster?.currentSrc||poster?.src||'',...(description?{description}:{})};
   }
   function resolveSearch(){
     if(location.pathname!=='/search')return;
@@ -267,7 +312,7 @@
   function scan(){
     if(route!==location.href){resumeEpoch++;resuming=false;if(!nativeMode)pausedForNative=false;route=location.href;metadata=null;restored=false;observed.clear();customState=new WeakMap();send({type:'route',url:route});}
     resolveSearch();const next=pageData();
-    if(next){metadata=next;send({type:'metadata',metadata});}
+    if(next){const {description,...identity}=next;metadata=identity;send({type:'metadata',metadata:next});}
     catalogue();episodes();seasonChoices();if(nativeMode&&metadata&&!sourceOptionsLoaded&&document.querySelector('button[aria-label="Provider"]')){sourceOptionsLoaded=true;collectSourceChoices();}
     if(metadata&&!window.AnimeSyncMediaSelection?.())for(const root of roots())for(const el of root.querySelectorAll('video,source,track')){
       if(el.tagName==='TRACK'&&el.kind!=='subtitles'&&el.kind!=='captions')continue;

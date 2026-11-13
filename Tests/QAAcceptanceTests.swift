@@ -21,7 +21,7 @@ final class QAAcceptanceTests: XCTestCase {
         if buttons.contains(id) || ["episodes.current","episodes.ranges","player.play-pause","player.skip.back","player.skip.forward"].contains(id) || id.hasPrefix("episode.choice.") || id.hasPrefix("nav.item.") || id.hasPrefix("library.filter.") || id.hasPrefix("player.subtitle.track.") { return app.buttons.matching(identifier: id).firstMatch }
         if ["search.field", "library.search", "tv.pair.address", "tv.pair.pin", "tv.episode.number"].contains(id) { return app.textFields.matching(identifier: id).firstMatch }
         if ["qa.tv.command-count", "qa.player.ready", "qa.player.time", "player.caption", "player.time", "tv.control.status"].contains(id) { return app.staticTexts.matching(identifier: id).firstMatch }
-        if ["nav.pane", "row.continue", "row.history", "tv.content", "screen.anime-sync","screen.episode","episodes.list"].contains(id) { return app.scrollViews.matching(identifier: id).firstMatch }
+        if ["nav.pane", "row.continue", "row.history", "tv.content", "screen.anime-sync","screen.episode","episodes.list","episode.synopsis"].contains(id) { return app.scrollViews.matching(identifier: id).firstMatch }
         if ["tv.seek","player.timeline"].contains(id) { return app.sliders.matching(identifier: id).firstMatch }
         if id == "player.subtitle.style" { return app.switches.matching(identifier: id).firstMatch }
         return app.descendants(matching: .any).matching(identifier: id).firstMatch
@@ -482,6 +482,49 @@ final class QAAcceptanceTests: XCTestCase {
         openConnect(app,fromTVPanel: true)
         XCTAssertTrue(element(app, "tv.pair.submit").exists)
         element(app,"tv.pair.cancel").tap()
+    }
+
+    @MainActor func testEpisodeSynopsisScrollsInPortraitAndLandscape() throws {
+        let app = launch("--qa-episode-synopsis")
+        let continuing = element(app,"row.continue")
+        XCTAssertTrue(continuing.waitForExistence(timeout: 5))
+        try XCTUnwrap(cards(continuing).first).tap()
+        let page = element(app,"screen.episode"), panel = element(app,"episode.synopsis")
+        let play = element(app,"destination.here")
+        let offset = app.staticTexts.matching(identifier: "qa.synopsis.offset").firstMatch
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        defer { XCUIDevice.shared.orientation = .portrait }
+
+        for orientation in [UIDeviceOrientation.portrait,.landscapeLeft] {
+            XCUIDevice.shared.orientation = orientation
+            let oriented = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in
+                (app.frame.width > app.frame.height) == orientation.isLandscape
+            },object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [oriented],timeout: 6),.completed)
+            for _ in 0..<3 {
+                let viewport = page.frame.intersection(app.frame)
+                if viewport.insetBy(dx: -1,dy: -1).contains(panel.frame) { break }
+                let x = viewport.minX + 50
+                let from = playerCoordinate(app,at: CGPoint(x: x,y: viewport.midY + 40),viewport: app.frame)
+                let to = playerCoordinate(app,at: CGPoint(x: x,y: viewport.midY - 15),viewport: app.frame)
+                from.press(forDuration: 0.05,thenDragTo: to,withVelocity: .slow,thenHoldForDuration: 0)
+            }
+            let viewport = app.frame, region = panel.frame
+            XCTAssertTrue(page.frame.intersection(viewport).insetBy(dx: -1,dy: -1).contains(region))
+            XCTAssertGreaterThan(region.height,40)
+            XCTAssertLessThanOrEqual(region.height,65)
+            let playBefore = play.frame.minY
+            let textBefore = try XCTUnwrap(Double(offset.label))
+            let start = playerCoordinate(app,at: CGPoint(x: region.midX,y: region.maxY - 7),viewport: viewport)
+            let end = playerCoordinate(app,at: CGPoint(x: region.midX,y: region.minY + 7),viewport: viewport)
+            start.press(forDuration: 0.05,thenDragTo: end)
+            let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in
+                (Double(offset.label) ?? textBefore) < textBefore - 8
+            },object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [moved],timeout: 4),.completed,"The synopsis itself must scroll")
+            XCTAssertEqual(play.frame.minY,playBefore,accuracy: 2,"The episode page must stay still")
+            screenshot(app,orientation.isLandscape ? "fixture-synopsis-landscape" : "fixture-synopsis-portrait")
+        }
     }
 
     @MainActor func testEpisodeWindowTitlesRangesWatchedAndNamedMiruroSources() {

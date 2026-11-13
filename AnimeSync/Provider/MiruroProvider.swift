@@ -7,6 +7,7 @@ import WebKit
     @Published private(set) var groups: [CatalogueGroup] = []
     @Published private(set) var hero: CatalogueHero?
     @Published private(set) var metadata: AnimeMetadata?
+    @Published private(set) var synopsis = ""
     @Published private(set) var seasons: [SeasonChoice] = []
     @Published private(set) var episodes: [EpisodeChoice] = []
     @Published private(set) var episodeInventoryComplete = false
@@ -123,7 +124,7 @@ import WebKit
         navigationEpoch &+= 1; let epoch = navigationEpoch
         documentNonce = UUID().uuidString
         currentURL = url; websiteMode = !native; loading = true; error = nil
-        groups = []; hero = nil; metadata = nil; seasons = []; episodes = []; sources = []; unsupportedSources = []; subtitles = []
+        groups = []; hero = nil; metadata = nil; synopsis = ""; seasons = []; episodes = []; sources = []; unsupportedSources = []; subtitles = []
         episodeInventoryComplete = false; sourceChoices = []; sourceChoicesLoading = false
         selectedChoiceID = ""; selectionToken = ""; selectionRevision &+= 1
         lastSessionID = ""; lastSessionRevision = nil; sessionChanging = false
@@ -253,7 +254,7 @@ import WebKit
     func stop() {
         loadTask?.cancel(); cancelHandoff(ProviderFailure.staleNavigation)
         cancelSourceProbes()
-        seasons = []
+        seasons = []; synopsis = ""
         navigationEpoch &+= 1; documentNonce = UUID().uuidString; loading = false
         if !fixture { clearingDocument = true; webView.stopLoading(); webView.loadHTMLString("", baseURL: nil) }
     }
@@ -332,6 +333,8 @@ import WebKit
         case "metadata":
             guard let item = packet["metadata"]?.object, let next = AnimeMetadata(json: item),
                   withoutFragment(next.watchURL) == withoutFragment(currentURL) else { return }
+            let description = String((item["description"]?.string ?? "").prefix(6000)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if synopsis != description { synopsis = description }
             if metadata != next { metadata = next }; if loading { loading = false }
             if sources.isEmpty, sourceStatus == .loadingPlayer { sourceStatus = .waitingForStream }
         case "seasons":
@@ -505,7 +508,7 @@ import WebKit
         if !websiteMode, navigationAction.navigationType == .linkActivated { decisionHandler(.cancel); onWatchRequested?(url); return }
         cancelHandoff(ProviderFailure.staleNavigation)
         cancelSourceProbes()
-        documentNonce = UUID().uuidString; currentURL = url; metadata = nil; sources = []; subtitles = []; unsupportedSources = []
+        documentNonce = UUID().uuidString; currentURL = url; metadata = nil; synopsis = ""; sources = []; subtitles = []; unsupportedSources = []
         seasons = []; episodes = []; episodeInventoryComplete = false; sourceChoices = []; sourceChoicesLoading = false
         selectedChoiceID = ""; selectionToken = ""; selectionRevision &+= 1
         lastSessionID = ""; lastSessionRevision = nil; sessionChanging = false

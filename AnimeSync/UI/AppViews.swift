@@ -454,7 +454,12 @@ struct EpisodeScreen: View {
                 if let metadata = model.provider.metadata {
                     HStack(alignment: .top,spacing: 18) {
                         AsyncImage(url: model.fixture ? nil : metadata.posterURL) { image in image.resizable().scaledToFill() } placeholder: { RoundedRectangle(cornerRadius: 12).fill(Theme.surface).overlay(Image(systemName: "play.rectangle")) }.frame(width: 100,height: 142).clipShape(RoundedRectangle(cornerRadius: 12))
-                        VStack(alignment: .leading,spacing: 12) { Text(metadata.title).font(.title2.bold()).lineLimit(3); Text("Episode " + metadata.episode).foregroundStyle(.secondary); Text(model.sync.isSignedIn ? "Progress sync is on" : "Sign in to sync across devices").font(.caption).foregroundStyle(Theme.accent) }.frame(maxWidth: .infinity,alignment: .leading)
+                        VStack(alignment: .leading,spacing: 12) {
+                            Text(metadata.title).font(.title2.bold()).lineLimit(3)
+                            Text("Episode " + metadata.episode).foregroundStyle(.secondary)
+                            Text(model.sync.isSignedIn ? "Progress sync is on" : "Sign in to sync across devices").font(.caption).foregroundStyle(Theme.accent)
+                            if !model.provider.synopsis.isEmpty { EpisodeSynopsis(text: model.provider.synopsis) }
+                        }.frame(maxWidth: .infinity,alignment: .leading)
                     }
                     Button { Task { await model.playHere() } } label: { Label("Play here",systemImage: "play.fill").foregroundStyle(Theme.background).frame(maxWidth: .infinity).padding(14) }.buttonStyle(.borderedProminent).accessibilityIdentifier("destination.here")
                     if model.provider.sources.isEmpty { Text(model.provider.sourceStatus.rawValue).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("source.status") }
@@ -516,6 +521,48 @@ struct EpisodeScreen: View {
                 }
             }.scrollIndicators(.hidden).keepHorizontalGesture()
         }.accessibilityIdentifier("seasons.choices")
+    }
+}
+private struct EpisodeSynopsis: View {
+    let text: String
+    @State private var contentHeight: CGFloat = 64
+    #if DEBUG
+    @State private var testScrollOffset: CGFloat = 0
+    private let checkingScroll = ProcessInfo.processInfo.arguments.contains("--qa-episode-synopsis")
+    #endif
+
+    var body: some View {
+        ScrollView {
+            #if DEBUG
+            if checkingScroll {
+                synopsisText.onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("synopsis.viewport")).minY } action: { testScrollOffset = $0 }
+            } else { synopsisText }
+            #else
+            synopsisText
+            #endif
+        }
+        .frame(height: min(64,contentHeight))
+        .scrollBounceBehavior(.basedOnSize)
+        .background(Theme.surface.opacity(0.55),in: .rect(cornerRadius: 8))
+        .clipShape(.rect(cornerRadius: 8))
+        .accessibilityIdentifier("episode.synopsis")
+        #if DEBUG
+        .coordinateSpace(name: "synopsis.viewport")
+        .overlay(alignment: .topLeading) {
+            if checkingScroll {
+                Text(String(Double(testScrollOffset))).font(.caption2).opacity(0.01).allowsHitTesting(false)
+                    .accessibilityIdentifier("qa.synopsis.offset")
+            }
+        }
+        #endif
+    }
+
+    private var synopsisText: some View {
+        Text(verbatim: text)
+            .font(.footnote).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity,alignment: .leading)
+            .padding(.vertical,6).padding(.horizontal,8)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
     }
 }
 struct AppSettings: View {

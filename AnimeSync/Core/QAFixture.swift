@@ -33,8 +33,10 @@ import Combine
     private var providerSubscriptions: [AnyCancellable] = []
     private var fixtureAudioChoice = "qa.audio.sub"
     private var fixtureProviderChoice = "qa.provider.a"
+    private let includeSynopsis: Bool
 
     init(arguments: [String] = ProcessInfo.processInfo.arguments) {
+        includeSynopsis = arguments.contains("--qa-episode-synopsis")
         preferenceName = "qa-ios-fixture-" + UUID().uuidString
         preferences = UserDefaults(suiteName: preferenceName)!
         paired = !arguments.contains("--qa-tv-unpaired")
@@ -199,7 +201,11 @@ import Combine
             let episode = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "ep" })?.value ?? "6"
             let title = rows.values.first { $0["anime_id"]?.string == id }?["title"]?.string ?? "Fixture anime"
             let metadata = AnimeMetadata(animeID: id, episode: episode, title: title, watchURL: url)
-            provider.receiveFixture(["type": .string("metadata"), "metadata": .object(metadata.json)])
+            var details = metadata.json
+            if includeSynopsis && id == "21" {
+                details["description"] = .string((1...16).map { "At stop \($0), the crew discovers a different island and learns its local history before setting sail again." }.joined(separator: "\n\n"))
+            }
+            provider.receiveFixture(["type": .string("metadata"), "metadata": .object(details)])
             let episodeCount: Int = id == "21" ? 1140 : 40
             var episodeChoices: [JSONValue] = []
             episodeChoices.reserveCapacity(episodeCount)

@@ -9,6 +9,7 @@ LIVE = 'testLiveMiruroCatalogueHeroAndSearchExtraction'
 FOCUSED_UNIT_CLASSES = {
     'library-resume': ('AppModelTests',),
     'connection-recovery': ('AppModelTests', 'NativePlaybackTests', 'NetworkRoutingTests'),
+    'episode-synopsis': ('AppModelTests',),
 }
 FEATURES = [
     'testNativeLibraryFiltersSearchAndReturn',
@@ -42,6 +43,9 @@ def scope(root, focus=''):
 
 def focused_unit_scope(root, focus, all_ui):
     classes = FOCUSED_UNIT_CLASSES[focus]
+    ui = ['testEpisodeSynopsisScrollsInPortraitAndLandscape'] if focus == 'episode-synopsis' else []
+    if not set(ui).issubset(all_ui):
+        raise ValueError('Required UI case is missing from the source')
     methods = []
     for name in classes:
         source = root / 'Tests' / f'{name}.swift'
@@ -54,8 +58,8 @@ def focused_unit_scope(root, focus, all_ui):
             raise ValueError(f'Expected tests in {name} for {focus}')
         methods.extend(selected)
     reason = f'Focused {focus.replace("-", " ")} checks'
-    return dict(focus=focus, unitClasses=list(classes), unitMethods=methods, selectedUIMethods=[],
-                excludedUIMethods=[dict(method=name, reason=reason) for name in all_ui])
+    return dict(focus=focus, unitClasses=list(classes), unitMethods=methods, selectedUIMethods=ui,
+                excludedUIMethods=[dict(method=name, reason=reason) for name in all_ui if name not in ui])
 
 
 def main():
@@ -68,7 +72,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / 'test-scope.json').write_text(json.dumps(selected, indent=2) + '\n')
     if 'unitClasses' in selected:
-        targets = [f'-only-testing:AnimeSyncTests/{name}' for name in selected['unitClasses']]
+        targets = [f'-only-testing:AnimeSyncTests/{name}' for name in selected['unitClasses']] + [
+            '-only-testing:AnimeSyncUITests/QAAcceptanceTests/' + name for name in selected['selectedUIMethods']]
     else:
         targets = ['-only-testing:AnimeSyncTests'] + [
             '-only-testing:AnimeSyncUITests/QAAcceptanceTests/' + name for name in selected['selectedUIMethods']]
