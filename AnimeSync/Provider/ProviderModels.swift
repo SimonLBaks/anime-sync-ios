@@ -22,6 +22,31 @@ struct CatalogueGroup: Identifiable, Equatable {
     var items: [CatalogueCard]
     init(title: String, items: [CatalogueCard]) { self.title = title; self.items = items }
 }
+struct SearchSuggestion: Identifiable, Equatable {
+    let card: CatalogueCard
+    let year: String
+    let format: String
+    let episodeCount: String
+    let score: String
+    var id: String { card.id }
+
+    init?(json: JSONObject, page: URL) {
+        guard let card = CatalogueCard(json: json), AppWebPolicy.origin(card.url) == AppWebPolicy.origin(page),
+              card.url.path.range(of: #"^/watch/[A-Za-z0-9_-]{1,160}/[^/]+/?\z"#,options: .regularExpression) != nil,
+              card.url.fragment == nil else { return nil }
+        self.card = card
+        year = Self.field(json["year"],pattern: #"^[0-9]{4}\z"#)
+        format = Self.field(json["format"],pattern: #"^[A-Za-z0-9][A-Za-z0-9 _-]{0,23}\z"#)
+        episodeCount = Self.field(json["episode_count"],pattern: #"^[0-9]{1,5}\z"#)
+        score = Self.field(json["score"],pattern: #"^(?:[0-9]{1,2}|100)\z"#)
+    }
+
+    private static func field(_ value: JSONValue?, pattern: String) -> String {
+        let text = value?.string ?? ""
+        guard text.count <= 24, text.range(of: pattern,options: .regularExpression) != nil else { return "" }
+        return text
+    }
+}
 struct CatalogueHero: Equatable {
     var title: String
     var logoURL: URL?

@@ -32,7 +32,10 @@ struct TakeoverRequest: Identifiable {
     @Published var message: String?
     @Published var takeover: TakeoverRequest?
     @Published var player: NativePlaybackModel?
-    @Published var searchText = ""
+    @Published var searchText = "" {
+        didSet { if searchQuery != Self.normalizedSearch(oldValue) { updateSearchSuggestions() } }
+    }
+    @Published private(set) var previewSearchURL: URL?
     @Published var libraryQuery = ""
     @Published var libraryFilter = "continue"
     @Published var signingIn = false
@@ -40,6 +43,8 @@ struct TakeoverRequest: Identifiable {
     @Published var selectedSourceID = ""
     private var routes: [AppRoute] = []
     private var idle: Task<Void,Never>?
+    private var searchDelay: Task<Void,Never>?
+    private var searchRequest: UInt64 = 0
     private var pendingPlay = false
     private var resolvingEpoch: UInt64 = 0
     private var pendingResume: ResumeSnapshot?
@@ -151,8 +156,13 @@ struct TakeoverRequest: Identifiable {
         if route != next { routes.append(route); show(next) }
     }
     private func show(_ next: AppRoute) {
+        cancelSearchSuggestions()
         clearSelection(); clearBrowser()
         route = next; signingIn = false; signInProviderURL = nil
+        if next.section == "Search", !next.website {
+            searchText = next.url.flatMap { URLComponents(url: $0,resolvingAgainstBaseURL: false) }?.queryItems?.first(where: { $0.name == "q" })?.value ?? ""
+            cancelSearchSuggestions()
+        }
         if next.website, let url = next.url { provider.openWebsite(section: next.section,url: url,panel: next.panel) }
         else if next.section == "Anime Sync" { provider.stop(); dashboard.load(origin: sync.baseURL,accountGeneration: sync.accountGeneration) }
         else if next.section == "Settings" || next.section == "History" { provider.stop() }
@@ -172,13 +182,63 @@ struct TakeoverRequest: Identifiable {
         else { drawer = true; touchDrawer() }
     }
     func search() {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = searchQuery
         guard !query.isEmpty else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),to: nil,from: nil,for: nil)
-        clearSelection(); clearBrowser(); provider.search(query)
+        let url = MiruroProvider.searchURL(query)
+        let alreadyLoading = previewSearchURL != nil && provider.currentURL == previewSearchURL
+        cancelSearchSuggestions()
+        clearSelection(); clearBrowser()
+        if route.section != "Search" { routes.append(route) }
+        route = AppRoute(section: "Search",url: url)
+        if !alreadyLoading { provider.browse(section: "Search",url: url) }
+    }
+    var showingSearchSuggestions: Bool { previewSearchURL != nil && route.section == "Search" && !route.website }
+    var suggestionsAreCurrent: Bool { showingSearchSuggestions && provider.currentURL == previewSearchURL }
+    var showingFullSearchResults: Bool {
+        guard route.section == "Search", !showingSearchSuggestions, let url = route.url else { return false }
+        let query = URLComponents(url: url,resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value
+        return query == searchQuery
+    }
+    private var searchQuery: String { Self.normalizedSearch(searchText) }
+    private static func normalizedSearch(_ value: String) -> String {
+        String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+    }
+
+    private func updateSearchSuggestions() {
+        guard active, route.section == "Search", !route.website, !signingIn else { return }
+        cancelSearchSuggestions()
+        let query = searchQuery
+        guard query.count >= 2 else {
+            if query.isEmpty, route.url != nil || provider.currentURL.path == "/search" && provider.currentURL.query != nil {
+                route.url = nil
+                provider.browse(section: "Search")
+            }
+            return
+        }
+        searchRequest &+= 1
+        let url = MiruroProvider.searchURL(query,request: searchRequest)
+        previewSearchURL = url
+        searchDelay = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(325))
+            guard !Task.isCancelled, let self, self.previewSearchURL == url, self.route.section == "Search",
+                  !self.route.website, !self.signingIn, self.active else { return }
+            self.provider.browse(section: "Search",url: url)
+        }
+    }
+    private func cancelSearchSuggestions() {
+        searchDelay?.cancel(); searchDelay = nil
+        previewSearchURL = nil
+    }
+    func openSuggestion(_ choice: SearchSuggestion) {
+        guard suggestionsAreCurrent, provider.searchSuggestions.contains(choice) else { return }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),to: nil,from: nil,for: nil)
+        route.url = MiruroProvider.searchURL(searchQuery)
+        open(choice.card.url)
     }
     func open(_ url: URL, replacing: Bool = false) {
         guard AppWebPolicy.isProvider(url) else { return }
+        cancelSearchSuggestions()
         if !replacing { routes.append(route) }
         clearSelection(); clearBrowser(); signingIn = false; signInProviderURL = nil; route = AppRoute(section: "Episode",url: url)
         provider.browse(section: "Episode",url: url)
@@ -390,6 +450,7 @@ struct TakeoverRequest: Identifiable {
         show(next)
     }
     func signIn() {
+        cancelSearchSuggestions()
         clearSelection(); clearBrowser()
         signInProviderURL = route.website ? provider.currentURL : nil
         provider.stop(); signingIn = true; dashboard.load(origin: sync.baseURL,accountGeneration: sync.accountGeneration)
@@ -547,6 +608,7 @@ struct TakeoverRequest: Identifiable {
         let captionContext = nativeSubtitleContext
         let preserveCaptions = captionContext.map { $0.player == player?.id && $0.navigation == resolvingEpoch && $0.account == sync.accountGeneration && $0.source == provider.selectionRevision } == true
         active = false; sceneGeneration &+= 1
+        searchDelay?.cancel(); searchDelay = nil
         connectionRecovery?.task.cancel(); connectionRecovery = nil
         clearSelection(); clearBrowser(); tv.stopPolling(); discovery.stop(); dashboard.pause()
         // The background transition invalidates pending launches, while this
@@ -561,6 +623,7 @@ struct TakeoverRequest: Identifiable {
         // the optional home-network override cannot be started.
         try? await restoreConnection()
         guard active, scene == sceneGeneration, !Task.isCancelled else { return }
+        if showingSearchSuggestions, provider.currentURL != previewSearchURL { updateSearchSuggestions() }
         let showingProvider = !["Anime Sync","Settings","History"].contains(route.section) && !signingIn
         provider.refreshNetwork(reloadFailed: player == nil && showingProvider)
         dashboard.refreshNetwork(reloadFailed: route.section == "Anime Sync" || signingIn)

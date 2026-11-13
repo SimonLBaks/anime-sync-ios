@@ -8,6 +8,8 @@ import WebKit
     @Published private(set) var hero: CatalogueHero?
     @Published private(set) var metadata: AnimeMetadata?
     @Published private(set) var synopsis = ""
+    @Published private(set) var searchSuggestions: [SearchSuggestion] = []
+    @Published private(set) var suggestionsLoading = false
     @Published private(set) var seasons: [SeasonChoice] = []
     @Published private(set) var episodes: [EpisodeChoice] = []
     @Published private(set) var episodeInventoryComplete = false
@@ -100,10 +102,14 @@ import WebKit
         }
         browse(section: section, url: URL(string: "https://miruro.cx" + path)!)
     }
-    func search(_ query: String) {
+    static func searchURL(_ query: String, request: UInt64? = nil) -> URL {
         var parts = URLComponents(string: "https://miruro.cx/search")!
-        parts.queryItems = [URLQueryItem(name: "q", value: query)]
-        browse(section: "Search", url: parts.url!)
+        parts.queryItems = [URLQueryItem(name: "q",value: query)]
+        // URLComponents leaves literal plus signs intact, while URLSearchParams
+        // decodes them as spaces. Encode them as query data.
+        parts.percentEncodedQuery = parts.percentEncodedQuery?.replacingOccurrences(of: "+",with: "%2B")
+        if let request { parts.fragment = "anime-sync-suggestions=\(request)" }
+        return parts.url!
     }
     func open(url: URL, native: Bool = true, autoplay: Bool = false) {
         loadDocument(url: url, native: native, autoplay: autoplay, keepReloadBudget: false)
@@ -125,6 +131,7 @@ import WebKit
         documentNonce = UUID().uuidString
         currentURL = url; websiteMode = !native; loading = true; error = nil
         groups = []; hero = nil; metadata = nil; synopsis = ""; seasons = []; episodes = []; sources = []; unsupportedSources = []; subtitles = []
+        searchSuggestions = []; suggestionsLoading = section == "Search" && url.fragment?.hasPrefix("anime-sync-suggestions=") == true
         episodeInventoryComplete = false; sourceChoices = []; sourceChoicesLoading = false
         selectedChoiceID = ""; selectionToken = ""; selectionRevision &+= 1
         lastSessionID = ""; lastSessionRevision = nil; sessionChanging = false
@@ -147,8 +154,28 @@ import WebKit
                 }
                 guard self.navigationEpoch == epoch, !Task.isCancelled else { return }
                 self.refreshNetwork()
-                self.ownedNavigation = true
-                self.webView.load(URLRequest(url: url))
+                // A new query generation can have the same URL apart from its
+                // fragment. Rebind this exact search document to the new nonce.
+                if self.section == "Search", let displayed = self.webView.url, displayed != url,
+                   self.withoutFragment(displayed) == self.withoutFragment(url) {
+                    let target = ProviderPolicy.jsonLiteral(url.absoluteString)
+                    let previous = ProviderPolicy.jsonLiteral(displayed.absoluteString)
+                    let view = self.webView
+                    let rebound = (try? await view.evaluateJavaScript("""
+                    (()=>{if (location.href !== \(previous)) return false;
+                    history.replaceState(history.state,'',\(target));
+                    \(self.documentSetup())
+                    return true;})()
+                    """)) as? Bool
+                    guard self.navigationEpoch == epoch, !Task.isCancelled else { return }
+                    if rebound != true {
+                        self.ownedNavigation = true
+                        view.load(URLRequest(url: url))
+                    }
+                } else {
+                    self.ownedNavigation = true
+                    self.webView.load(URLRequest(url: url))
+                }
             } catch {
                 guard self.navigationEpoch == epoch else { return }
                 self.loading = false; self.error = "The page's privacy boundary could not initialize. Try again."
@@ -254,7 +281,7 @@ import WebKit
     func stop() {
         loadTask?.cancel(); cancelHandoff(ProviderFailure.staleNavigation)
         cancelSourceProbes()
-        seasons = []; synopsis = ""
+        seasons = []; synopsis = ""; searchSuggestions = []; suggestionsLoading = false
         navigationEpoch &+= 1; documentNonce = UUID().uuidString; loading = false
         if !fixture { clearingDocument = true; webView.stopLoading(); webView.loadHTMLString("", baseURL: nil) }
     }
@@ -309,6 +336,7 @@ import WebKit
         case "route":
             guard let raw = packet["url"]?.string, let url = URL(string: raw), AppWebPolicy.isProvider(url),
                   AppWebPolicy.origin(url) == AppWebPolicy.origin(currentURL) else { return }
+            if section == "Search", !websiteMode, currentURL.path == "/search", url != currentURL { return }
             if withoutFragment(url) != withoutFragment(currentURL) {
                 // A new route receives a fresh document/iframe epoch in both modes.
                 // Old iframe/video callbacks cannot be relabelled as the next episode.
@@ -329,6 +357,17 @@ import WebKit
             }
             loading = packet["loading"]?.bool ?? false
             emptyMessage = String((packet["message"]?.string ?? "No titles available. Try Reload.").prefix(500))
+        case "search-suggestions":
+            guard section == "Search", !websiteMode, currentURL.fragment?.hasPrefix("anime-sync-suggestions=") == true,
+                  let parts = URLComponents(url: currentURL,resolvingAgainstBaseURL: false),
+                  parts.path == "/search", parts.queryItems?.first(where: { $0.name == "q" })?.value == packet["query"]?.string else { return }
+            var seen = Set<String>()
+            searchSuggestions = (packet["items"]?.array ?? []).prefix(6).compactMap { value in
+                guard let item = value.object, let choice = SearchSuggestion(json: item,page: currentURL),
+                      seen.insert(choice.id).inserted else { return nil }
+                return choice
+            }
+            suggestionsLoading = packet["loading"]?.bool == true
         case "hero": if let item = packet["hero"]?.object { hero = CatalogueHero(json: item) }
         case "metadata":
             guard let item = packet["metadata"]?.object, let next = AnimeMetadata(json: item),
@@ -522,9 +561,12 @@ import WebKit
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard webView === self.webView, let url = webView.url, AppWebPolicy.isProvider(url) else { return }
-        let script = ProviderScripts.bootstrap(nonce: documentNonce, handler: "providerControl", origins: AppWebPolicy.providers) + "\n" + ProviderScripts.read("tv-navigation.js") + "\n" + ProviderScripts.read("provider.js")
-        evaluate(script + "\nwindow.AnimeTvPage?.nativeMode(\(!websiteMode));window.AnimeTvPage?.browseMode(\(websiteMode));")
+        evaluate(documentSetup())
         if let panel = pendingPanel { pendingPanel = nil; evaluate("window.AnimeTvPage?.openPanel(\(ProviderPolicy.jsonLiteral(panel)))") }
+    }
+    private func documentSetup() -> String {
+        let script = ProviderScripts.bootstrap(nonce: documentNonce, handler: "providerControl", origins: AppWebPolicy.providers) + "\n" + ProviderScripts.read("tv-navigation.js") + "\n" + ProviderScripts.read("provider.js")
+        return script + "\nwindow.AnimeTvPage?.nativeMode(\(!websiteMode));window.AnimeTvPage?.browseMode(\(websiteMode));"
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { guard webView === self.webView else { return }; navigationFailed(error) }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { guard webView === self.webView else { return }; navigationFailed(error) }
@@ -537,7 +579,8 @@ import WebKit
     func receiveFixture(_ packet: JSONObject) {
         #if DEBUG
         guard fixture else { return }
-        var value = packet; value["page"] = .string(currentURL.absoluteString)
+        var value = packet
+        if value["page"] == nil { value["page"] = .string(currentURL.absoluteString) }
         if value["selection"] == nil { value["selection"] = .string(selectionToken) }
         consume(value)
         #endif

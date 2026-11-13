@@ -338,6 +338,30 @@ final class QAAcceptanceTests: XCTestCase {
         XCTAssertTrue(element(app, "screen.search").exists)
     }
 
+    @MainActor func testLiveSearchSuggestionsAndViewAll() {
+        let app = launch()
+        select(app,"search")
+        setText(app,"search.field","One Pie",replacing: "")
+        let suggestions = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@","search.suggestion."))
+        let first = suggestions.firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 6))
+        XCTAssertTrue(first.label.contains("One Piece"))
+        XCTAssertTrue(first.label.contains("1999"))
+        XCTAssertTrue(first.label.contains("40 EP"))
+        XCTAssertTrue(first.label.contains("88"))
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        screenshot(app,"fixture-live-search-suggestions")
+        element(app,"search.view-all").tap()
+        XCTAssertTrue(element(app,"row.search results").waitForExistence(timeout: 5))
+        XCTAssertEqual(suggestions.count,0)
+
+        setText(app,"search.field","One Piec",replacing: "One Pie")
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        first.tap()
+        XCTAssertTrue(element(app,"destination.here").waitForExistence(timeout: 5))
+        XCTAssertFalse(element(app,"player.close").exists)
+    }
+
     @MainActor func testPreviousPageEdgeBackUnwindsVisitedSections() {
         let app = launch()
         defer { XCUIDevice.shared.orientation = .portrait }

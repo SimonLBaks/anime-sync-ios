@@ -218,12 +218,21 @@ enum CataloguePresentation {
 
 struct CatalogueScreen: View {
     @ObservedObject var model: AppModel
-    private var groups: [CatalogueGroup] { CataloguePresentation.groups(model.provider.groups,section: model.route.section) }
+    @FocusState private var searchFocused: Bool
+    private var groups: [CatalogueGroup] {
+        if model.route.section == "Search", !model.showingFullSearchResults { return [] }
+        return CataloguePresentation.groups(model.provider.groups,section: model.route.section)
+    }
     var body: some View {
         GeometryReader { viewport in
         ScrollView {
             VStack(alignment: .leading,spacing: 24) {
-                if model.route.section == "Search" { searchBar.padding(.horizontal,16).padding(.top,12) }
+                if model.route.section == "Search" {
+                    VStack(spacing: 6) {
+                        searchBar
+                        if model.showingSearchSuggestions { suggestions(availableHeight: viewport.size.height) }
+                    }.padding(.horizontal,16).padding(.top,12)
+                }
                 if model.route.section == "Home", let hero = model.provider.hero { HeroView(hero: hero,viewportWidth: viewport.size.width) { if let url = hero.url { model.open(url) } } }
                 if model.route.section == "Home", !model.sync.history.continuing.isEmpty {
                     PosterRow(title: "Continue Watching",identifier: "row.continue",viewportWidth: viewport.size.width) { width in
@@ -233,10 +242,12 @@ struct CatalogueScreen: View {
                 ForEach(groups) { group in
                     PosterRow(title: group.title,identifier: "row." + group.title.lowercased(),viewportWidth: viewport.size.width) { width in ForEach(group.items) { card in Poster(title: card.title,url: card.posterURL,badge: card.badge,width: width,identifier: card.id) { model.open(card.url) } } }
                 }
-                if model.provider.loading { ProgressView("Loading Miruro…").frame(maxWidth: .infinity).padding(30) }
-                if let error = model.provider.error { empty(error,button: "Try again") { Task { await model.retryConnection() } } }
-                else if !model.provider.loading && groups.isEmpty && model.provider.hero == nil && !(model.route.section == "Home" && !model.sync.history.continuing.isEmpty) {
-                    empty(model.provider.emptyMessage,button: "Open website") { model.website() }.accessibilityIdentifier("search.empty")
+                if model.route.section != "Search" || model.showingFullSearchResults {
+                    if model.provider.loading { ProgressView("Loading Miruro…").frame(maxWidth: .infinity).padding(30) }
+                    if let error = model.provider.error { empty(error,button: "Try again") { Task { await model.retryConnection() } } }
+                    else if !model.provider.loading && groups.isEmpty && model.provider.hero == nil && !(model.route.section == "Home" && !model.sync.history.continuing.isEmpty) {
+                        empty(model.provider.emptyMessage,button: "Open website") { model.website() }.accessibilityIdentifier("search.empty")
+                    }
                 }
             }.frame(width: viewport.size.width,alignment: .leading).padding(.bottom,28)
         }.scrollDismissesKeyboard(.interactively).refreshable { await model.retryConnection() }
@@ -247,9 +258,84 @@ struct CatalogueScreen: View {
     private var searchBar: some View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search anime",text: $model.searchText).submitLabel(.search).autocorrectionDisabled().onSubmit { model.search() }.accessibilityIdentifier("search.field")
-            Button { model.search() } label: { Image(systemName: "arrow.right").font(.system(size: 16,weight: .semibold)).frame(width: 34,height: 34).background(.white.opacity(0.1),in: Circle()) }.accessibilityLabel("Search").accessibilityIdentifier("search.submit")
+            TextField("Search anime",text: $model.searchText).focused($searchFocused).submitLabel(.search)
+                .autocorrectionDisabled().onSubmit { submitSearch() }.accessibilityIdentifier("search.field")
+            if !model.searchText.isEmpty {
+                Button { model.searchText = ""; searchFocused = true } label: {
+                    Image(systemName: "xmark").foregroundStyle(.secondary).frame(width: 32,height: 40)
+                }.buttonStyle(.plain).accessibilityLabel("Clear search")
+            }
+            Button(action: submitSearch) { Image(systemName: "arrow.right").font(.system(size: 16,weight: .semibold)).frame(width: 34,height: 34).background(.white.opacity(0.1),in: Circle()) }.accessibilityLabel("Search").accessibilityIdentifier("search.submit")
         }.padding(12).background(Theme.surface,in: RoundedRectangle(cornerRadius: 18)).overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.08))).keepHorizontalGesture()
+    }
+
+    private func submitSearch() {
+        searchFocused = false
+        model.search()
+    }
+
+    private func suggestions(availableHeight: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            if model.suggestionsAreCurrent, let error = model.provider.error {
+                Text(error).font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity,alignment: .leading).padding(14)
+            } else if !model.suggestionsAreCurrent || model.provider.suggestionsLoading {
+                ProgressView("Searching Miruro…").frame(maxWidth: .infinity,alignment: .leading).padding(14)
+            } else if model.provider.searchSuggestions.isEmpty {
+                Text("No matching titles").font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity,alignment: .leading).padding(14)
+            }
+            if model.suggestionsAreCurrent, !model.provider.searchSuggestions.isEmpty {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(model.provider.searchSuggestions) { item in
+                            Button {
+                                searchFocused = false
+                                model.openSuggestion(item)
+                            } label: { suggestionRow(item) }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel([item.card.title,item.year,item.format,item.episodeCount.isEmpty ? "" : item.episodeCount + " EP",item.score.isEmpty ? "" : "Score " + item.score].filter { !$0.isEmpty }.joined(separator: ", "))
+                                .accessibilityIdentifier("search.suggestion." + item.id)
+                            Divider()
+                        }
+                    }
+                }.frame(height: min(CGFloat(model.provider.searchSuggestions.count) * 77,max(77,availableHeight - 138)))
+                    .scrollDismissesKeyboard(.never)
+            }
+            Button(action: submitSearch) {
+                HStack {
+                    Text("View All").font(.subheadline.bold())
+                    Spacer()
+                    Image(systemName: "arrow.right")
+                }.foregroundStyle(Theme.accent).padding(.horizontal,14).frame(minHeight: 44).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("search.view-all")
+        }.background(Theme.surface,in: .rect(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.12)).allowsHitTesting(false) }
+            .accessibilityIdentifier("search.suggestions")
+    }
+
+    private func suggestionRow(_ item: SearchSuggestion) -> some View {
+        HStack(spacing: 12) {
+            AsyncImage(url: model.fixture ? nil : item.card.posterURL) { image in
+                image.resizable().scaledToFill()
+            } placeholder: { Color.white.opacity(0.07) }
+                .frame(width: 44,height: 60).clipShape(.rect(cornerRadius: 7)).accessibilityHidden(true)
+            VStack(alignment: .leading,spacing: 5) {
+                Text(item.card.title).font(.subheadline.bold()).foregroundStyle(.primary).lineLimit(2)
+                HStack(spacing: 4) {
+                    if !item.year.isEmpty { suggestionChip(item.year) }
+                    if !item.format.isEmpty { suggestionChip(item.format) }
+                    if !item.episodeCount.isEmpty { suggestionChip(item.episodeCount + " EP") }
+                    if !item.score.isEmpty { suggestionChip("☆ " + item.score) }
+                }
+            }.frame(maxWidth: .infinity,alignment: .leading)
+        }.padding(.horizontal,12).padding(.vertical,8).contentShape(Rectangle())
+    }
+
+    private func suggestionChip(_ text: String) -> some View {
+        Text(verbatim: text).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            .padding(.horizontal,5).padding(.vertical,3)
+            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.16)) }
     }
 }
 

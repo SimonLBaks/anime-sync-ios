@@ -150,6 +150,36 @@ import Foundation
         XCTAssertEqual(model.provider.currentURL,current)
     }
 
+    func testSearchPreviewRejectsOldQueryAndPromotesViewAll() async throws {
+        let http = AppModelHTTP(), model = try make(http)
+        model.navigate("Search")
+        model.searchText = "ram"
+        let first = try XCTUnwrap(model.previewSearchURL)
+        model.searchText = "ramu"
+        model.searchText = "ram"
+        let expected = try XCTUnwrap(model.previewSearchURL)
+        XCTAssertNotEqual(first,expected)
+        try await Task.sleep(for: .milliseconds(420))
+        XCTAssertEqual(model.provider.currentURL,expected)
+        let watch = "https://miruro.cx/watch/example/ramune"
+        let items: JSONValue = .array([.object(["title": .string("Ramune"),"url": .string(watch),
+            "year": .string("2025"),"format": .string("TV"),"episode_count": .string("13"),"score": .string("73")])])
+        model.provider.receiveFixture(["type": .string("search-suggestions"),"query": .string("ra"),"items": items])
+        XCTAssertTrue(model.provider.searchSuggestions.isEmpty)
+        model.provider.receiveFixture(["type": .string("search-suggestions"),"query": .string("ram"),"page": .string(first.absoluteString),"items": items])
+        XCTAssertTrue(model.provider.searchSuggestions.isEmpty)
+        model.provider.receiveFixture(["type": .string("search-suggestions"),"query": .string("ram"),"items": items])
+        XCTAssertEqual(model.provider.searchSuggestions.first?.score,"73")
+        model.search()
+        XCTAssertTrue(model.showingFullSearchResults)
+        XCTAssertNil(model.previewSearchURL)
+        XCTAssertNil(model.route.url?.fragment)
+        XCTAssertEqual(model.provider.currentURL,expected,"The full view reuses the already loaded provider results")
+        await model.back()
+        XCTAssertEqual(model.route,.home)
+        XCTAssertTrue(http.requests.isEmpty)
+    }
+
     func testForegroundRestoresConnectionBeforeReloadingFailedHome() async throws {
         var events: [String] = []
         let http = AppModelHTTP(), model = try make(http) { events.append("restore") }

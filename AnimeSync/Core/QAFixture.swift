@@ -239,6 +239,16 @@ import Combine
         }
         let labels = section == "Search" ? ["Search results"] : ["Latest Episodes", "Top Airing", "Popular Anime"]
         provider.receiveFixture(["type": .string("catalogue"), "loading": .bool(false), "message": .string(items.isEmpty ? "No anime found" : ""), "groups": .array(items.isEmpty ? [] : labels.map { .object(["title": .string($0), "items": .array(items)]) })])
+        if section == "Search", url.fragment?.hasPrefix("anime-sync-suggestions=") == true,
+           let typed = URLComponents(url: url,resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "q" })?.value {
+            let suggestions = items.compactMap { value -> JSONValue? in
+                guard var card = value.object, let title = card["title"]?.string, title.lowercased().contains(query) else { return nil }
+                card["year"] = .string("1999"); card["format"] = .string("TV")
+                card["episode_count"] = .string("40"); card["score"] = .string("88")
+                return .object(card)
+            }
+            provider.receiveFixture(["type": .string("search-suggestions"),"query": .string(typed),"items": .array(suggestions),"loading": .bool(false)])
+        }
         if section == "Home" { provider.receiveFixture(["type": .string("hero"), "hero": .object(["title": .string("One Piece"), "description": .string("A disposable preview for native iPhone layout and playback tests."), "meta": .string("Adventure · 40 episodes"), "url": .string("https://miruro.cx/watch/21/fixture-21?ep=6")])]) }
     }
     func seedDashboard(_ dashboard: DashboardProvider) {

@@ -1,5 +1,5 @@
 {
-  "version": "0.1.27",
-  "build": 29,
-  "reason": "Build 0.1.27 and verify episode synopsis scrolling in portrait and landscape."
+  "version": "0.1.28",
+  "build": 30,
+  "reason": "Build 0.1.28 and verify Miruro-ranked suggestions and View All."
 }

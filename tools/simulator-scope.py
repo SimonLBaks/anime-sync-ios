@@ -10,6 +10,7 @@ FOCUSED_UNIT_CLASSES = {
     'library-resume': ('AppModelTests',),
     'connection-recovery': ('AppModelTests', 'NativePlaybackTests', 'NetworkRoutingTests'),
     'episode-synopsis': ('AppModelTests',),
+    'search-suggestions': ('AppModelTests',),
 }
 FEATURES = [
     'testNativeLibraryFiltersSearchAndReturn',
@@ -43,7 +44,10 @@ def scope(root, focus=''):
 
 def focused_unit_scope(root, focus, all_ui):
     classes = FOCUSED_UNIT_CLASSES[focus]
-    ui = ['testEpisodeSynopsisScrollsInPortraitAndLandscape'] if focus == 'episode-synopsis' else []
+    ui = {
+        'episode-synopsis': ['testEpisodeSynopsisScrollsInPortraitAndLandscape'],
+        'search-suggestions': ['testLiveSearchSuggestionsAndViewAll'],
+    }.get(focus, [])
     if not set(ui).issubset(all_ui):
         raise ValueError('Required UI case is missing from the source')
     methods = []
