@@ -152,6 +152,8 @@ import Foundation
 
     func testSearchPreviewRejectsOldQueryAndPromotesViewAll() async throws {
         let http = AppModelHTTP(), model = try make(http)
+        let punctuation = MiruroProvider.searchURL("Sheep's Song +",request: 1)
+        XCTAssertTrue(punctuation.absoluteString.contains("q=Sheep%27s%20Song%20%2B"))
         model.navigate("Search")
         model.searchText = "ram"
         let first = try XCTUnwrap(model.previewSearchURL)

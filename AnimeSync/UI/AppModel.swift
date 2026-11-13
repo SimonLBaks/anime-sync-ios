@@ -186,12 +186,12 @@ struct TakeoverRequest: Identifiable {
         guard !query.isEmpty else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),to: nil,from: nil,for: nil)
         let url = MiruroProvider.searchURL(query)
-        let alreadyLoading = previewSearchURL != nil && provider.currentURL == previewSearchURL
+        let canReusePreview = suggestionsAreCurrent && provider.error == nil
         cancelSearchSuggestions()
         clearSelection(); clearBrowser()
         if route.section != "Search" { routes.append(route) }
         route = AppRoute(section: "Search",url: url)
-        if !alreadyLoading { provider.browse(section: "Search",url: url) }
+        if !canReusePreview { provider.browse(section: "Search",url: url) }
     }
     var showingSearchSuggestions: Bool { previewSearchURL != nil && route.section == "Search" && !route.website }
     var suggestionsAreCurrent: Bool { showingSearchSuggestions && provider.currentURL == previewSearchURL }
@@ -202,7 +202,9 @@ struct TakeoverRequest: Identifiable {
     }
     private var searchQuery: String { Self.normalizedSearch(searchText) }
     private static func normalizedSearch(_ value: String) -> String {
-        String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(decoding: trimmed.utf16.prefix(200),as: UTF16.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func updateSearchSuggestions() {

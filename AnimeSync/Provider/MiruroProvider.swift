@@ -40,6 +40,7 @@ import WebKit
     private var ownedNavigation = false
     private var clearingDocument = false
     private var loadTask: Task<Void, Never>?
+    private var suggestionDeadline: Task<Void, Never>?
     private var privacyRulesInstalled = false
     private var websiteEntry: WKBackForwardListItem?
     private var setWebsiteEntry = false
@@ -105,9 +106,9 @@ import WebKit
     static func searchURL(_ query: String, request: UInt64? = nil) -> URL {
         var parts = URLComponents(string: "https://miruro.cx/search")!
         parts.queryItems = [URLQueryItem(name: "q",value: query)]
-        // URLComponents leaves literal plus signs intact, while URLSearchParams
-        // decodes them as spaces. Encode them as query data.
+        // Match URLSearchParams decoding and WebKit's HTTPS URL serialization.
         parts.percentEncodedQuery = parts.percentEncodedQuery?.replacingOccurrences(of: "+",with: "%2B")
+            .replacingOccurrences(of: "'",with: "%27")
         if let request { parts.fragment = "anime-sync-suggestions=\(request)" }
         return parts.url!
     }
@@ -132,6 +133,15 @@ import WebKit
         currentURL = url; websiteMode = !native; loading = true; error = nil
         groups = []; hero = nil; metadata = nil; synopsis = ""; seasons = []; episodes = []; sources = []; unsupportedSources = []; subtitles = []
         searchSuggestions = []; suggestionsLoading = section == "Search" && url.fragment?.hasPrefix("anime-sync-suggestions=") == true
+        suggestionDeadline?.cancel()
+        if suggestionsLoading, !fixture {
+            suggestionDeadline = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(12))
+                guard !Task.isCancelled, let self, self.navigationEpoch == epoch, self.suggestionsLoading else { return }
+                self.suggestionsLoading = false
+                if self.error == nil { self.error = "Suggestions couldn’t load. Try View All." }
+            }
+        }
         episodeInventoryComplete = false; sourceChoices = []; sourceChoicesLoading = false
         selectedChoiceID = ""; selectionToken = ""; selectionRevision &+= 1
         lastSessionID = ""; lastSessionRevision = nil; sessionChanging = false
@@ -280,6 +290,7 @@ import WebKit
     func suspend() { pause(); cancelHandoff(ProviderFailure.staleNavigation) }
     func stop() {
         loadTask?.cancel(); cancelHandoff(ProviderFailure.staleNavigation)
+        suggestionDeadline?.cancel()
         cancelSourceProbes()
         seasons = []; synopsis = ""; searchSuggestions = []; suggestionsLoading = false
         navigationEpoch &+= 1; documentNonce = UUID().uuidString; loading = false
@@ -368,6 +379,10 @@ import WebKit
                 return choice
             }
             suggestionsLoading = packet["loading"]?.bool == true
+            if !suggestionsLoading {
+                suggestionDeadline?.cancel()
+                if error == "Suggestions couldn’t load. Try View All." { error = nil }
+            }
         case "hero": if let item = packet["hero"]?.object { hero = CatalogueHero(json: item) }
         case "metadata":
             guard let item = packet["metadata"]?.object, let next = AnimeMetadata(json: item),
