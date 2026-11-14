@@ -228,6 +228,18 @@ struct SyncLibraryCard: Identifiable, Equatable {
     private static func episodeText(_ value: JSONValue?) -> String {
         String((value?.string ?? value?.integer.map { String($0) } ?? "").prefix(80))
     }
+    var newEpisode: EpisodeProgressKey? {
+        let key = id.split(separator: ":", omittingEmptySubsequences: false)
+        guard hasNew, key.count == 2 else { return nil }
+        return EpisodeProgressKey(site: String(key[0]),animeID: String(key[1]),episode: nextEpisode)
+    }
+    var newEpisodeURL: URL? {
+        guard let episode = newEpisode else { return nil }
+        var lookup = URLComponents(string: "https://miruro.cx/search")!
+        lookup.queryItems = [URLQueryItem(name: "q", value: title)]
+        lookup.fragment = "anime-sync-id=\(episode.animeID)&anime-sync-ep=\(episode.episode)"
+        return lookup.url
+    }
     func nextAfter(_ checkpoint: HistoryEntry) -> String? {
         guard checkpoint.completed,
               let tracked = EpisodeProgressKey(site: "miruro",animeID: checkpoint.animeID,episode: checkpointEpisode),

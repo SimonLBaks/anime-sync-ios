@@ -219,12 +219,18 @@ enum CataloguePresentation {
 struct CatalogueScreen: View {
     @ObservedObject var model: AppModel
     @FocusState private var searchFocused: Bool
+    private var newEpisodes: [SyncLibraryCard] {
+        guard model.route == .home, model.sync.isSignedIn, model.dashboard.authenticated,
+              model.dashboard.currentOrigin == model.sync.baseURL else { return [] }
+        return Array(model.dashboard.libraryCards.lazy.filter { $0.newEpisode != nil }.prefix(24))
+    }
     private var groups: [CatalogueGroup] {
         if model.route.section == "Search", !model.showingFullSearchResults { return [] }
         return CataloguePresentation.groups(model.provider.groups,section: model.route.section)
     }
     var body: some View {
         GeometryReader { viewport in
+        let availableEpisodes = newEpisodes
         ScrollView {
             VStack(alignment: .leading,spacing: 24) {
                 if model.route.section == "Search" {
@@ -239,13 +245,20 @@ struct CatalogueScreen: View {
                         ForEach(model.sync.history.continuing) { card in Poster(title: card.title,url: model.fixture ? nil : card.posterURL,badge: "Episode " + card.episode,width: width,identifier: card.id) { Task { await model.continueWatching(card) } } }
                     }
                 }
+                if !availableEpisodes.isEmpty {
+                    PosterRow(title: "New Episodes",identifier: "row.new-episodes",viewportWidth: viewport.size.width) { width in
+                        ForEach(availableEpisodes) { card in
+                            Poster(title: card.title,url: model.fixture ? nil : card.posterURL,badge: "Episode " + card.nextEpisode,width: width,identifier: card.id) { Task { await model.openLibraryCard(card) } }
+                        }
+                    }
+                }
                 ForEach(groups) { group in
                     PosterRow(title: group.title,identifier: "row." + group.title.lowercased(),viewportWidth: viewport.size.width) { width in ForEach(group.items) { card in Poster(title: card.title,url: card.posterURL,badge: card.badge,width: width,identifier: card.id) { model.open(card.url) } } }
                 }
                 if model.route.section != "Search" || model.showingFullSearchResults {
                     if model.provider.loading { ProgressView("Loading Miruro…").frame(maxWidth: .infinity).padding(30) }
                     if let error = model.provider.error { empty(error,button: "Try again") { Task { await model.retryConnection() } } }
-                    else if !model.provider.loading && groups.isEmpty && model.provider.hero == nil && !(model.route.section == "Home" && !model.sync.history.continuing.isEmpty) {
+                    else if !model.provider.loading && groups.isEmpty && model.provider.hero == nil && availableEpisodes.isEmpty && !(model.route.section == "Home" && !model.sync.history.continuing.isEmpty) {
                         empty(model.provider.emptyMessage,button: "Open website") { model.website() }.accessibilityIdentifier("search.empty")
                     }
                 }
@@ -372,7 +385,7 @@ struct LibraryScreen: View {
                 TextField("Search your library",text: $model.libraryQuery).textFieldStyle(.roundedBorder).autocorrectionDisabled().accessibilityIdentifier("library.search").keepHorizontalGesture()
                 HStack { filter("Continue","continue"); filter("New episodes","new"); filter("All anime","all") }
                 LazyVGrid(columns: columns,alignment: .leading,spacing: 22) {
-                    ForEach(cards) { card in Poster(title: card.title,url: model.fixture ? nil : card.posterURL,badge: "Episode " + card.episode,width: cardWidth,identifier: card.id) { Task { await model.openLibraryCard(card) } } }
+                    ForEach(cards) { card in Poster(title: card.title,url: model.fixture ? nil : card.posterURL,badge: "Episode " + (card.hasNew ? card.nextEpisode : card.episode),width: cardWidth,identifier: card.id) { Task { await model.openLibraryCard(card) } } }
                 }
                 if cards.isEmpty {
                     if model.dashboard.loading { ProgressView("Loading library…").frame(maxWidth: .infinity).padding(30) }

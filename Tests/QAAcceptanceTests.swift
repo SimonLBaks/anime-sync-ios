@@ -21,7 +21,7 @@ final class QAAcceptanceTests: XCTestCase {
         if buttons.contains(id) || ["episodes.current","episodes.ranges","player.play-pause","player.skip.back","player.skip.forward"].contains(id) || id.hasPrefix("episode.choice.") || id.hasPrefix("nav.item.") || id.hasPrefix("library.filter.") || id.hasPrefix("player.subtitle.track.") { return app.buttons.matching(identifier: id).firstMatch }
         if ["search.field", "library.search", "tv.pair.address", "tv.pair.pin", "tv.episode.number"].contains(id) { return app.textFields.matching(identifier: id).firstMatch }
         if ["qa.tv.command-count", "qa.player.ready", "qa.player.time", "player.caption", "player.time", "tv.control.status"].contains(id) { return app.staticTexts.matching(identifier: id).firstMatch }
-        if ["nav.pane", "row.continue", "row.history", "tv.content", "screen.anime-sync","screen.episode","episodes.list","episode.synopsis"].contains(id) { return app.scrollViews.matching(identifier: id).firstMatch }
+        if ["nav.pane", "row.continue", "row.new-episodes", "row.history", "tv.content", "screen.anime-sync","screen.episode","episodes.list","episode.synopsis"].contains(id) { return app.scrollViews.matching(identifier: id).firstMatch }
         if ["tv.seek","player.timeline"].contains(id) { return app.sliders.matching(identifier: id).firstMatch }
         if id == "player.subtitle.style" { return app.switches.matching(identifier: id).firstMatch }
         return app.descendants(matching: .any).matching(identifier: id).firstMatch
@@ -312,6 +312,15 @@ final class QAAcceptanceTests: XCTestCase {
         continuing.swipeLeft()
         firstCards = cards(continuing)
         XCTAssertTrue(firstCards.contains { $0.identifier != firstID && fullyVisible($0,in: continuing,app: app,contentViewport: contentViewport) && $0.isHittable },"A horizontal swipe must expose another complete, actionable poster")
+        let newEpisodes = element(app, "row.new-episodes")
+        for _ in 0..<3 {
+            if cards(newEpisodes).first?.isHittable == true { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(newEpisodes.exists)
+        XCTAssertLessThanOrEqual(continuing.frame.maxY, newEpisodes.frame.minY + 1)
+        XCTAssertTrue(cards(newEpisodes).first?.label.contains("Episode 7") == true)
+        screenshot(app, "fixture-home-new-episodes")
         select(app, "history")
         XCTAssertFalse(element(app, "row.continue").exists)
         let recent = element(app, "row.history")

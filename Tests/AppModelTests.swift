@@ -71,7 +71,7 @@ import Foundation
         try XCTUnwrap(SyncLibraryCard(json: [
             "key": .string("miruro:21"),"title": .string("One Piece"),
             "url": .string("https://miruro.cx/watch/21/fixture-21?ep=" + urlEpisode),
-            "episode": .string("6"),"continuing": .bool(continuing),"has_new": .bool(hasNew)
+            "episode": .string("6"),"continuing": .bool(continuing),"has_new": .bool(hasNew),"next_episode": .string("7")
         ]))
     }
     private func block(_ name: String) -> AppModelGate {
@@ -244,6 +244,25 @@ import Foundation
         XCTAssertTrue(http.requests.allSatisfy { $0.httpMethod == "GET" })
     }
 
+    func testHomeContinueOpensTheCurrentEpisodeWithTwoSecondsSaved() async throws {
+        let http = AppModelHTTP(), model = try make(http)
+        var row = try XCTUnwrap(history()["progress"]?.array?.first?.object)
+        row["current_time"] = .number(2.418)
+        row["duration"] = .number(1430.053)
+        let rows: JSONObject = ["progress": .array([.object(row)])]
+        http.respond = { request in try self.reply(self.isHead(request) ? self.head() : rows) }
+
+        let loaded = await model.sync.refreshHistory()
+        XCTAssertTrue(loaded)
+        let entry = try XCTUnwrap(model.sync.history.continuing.first)
+        XCTAssertEqual(entry.resumePosition,2.418,accuracy: 0.001)
+        await model.continueWatching(entry)
+        XCTAssertEqual(model.route.section,"Episode")
+        XCTAssertEqual(model.route.url?.fragment,"anime-sync-id=21&anime-sync-ep=8")
+        XCTAssertEqual(http.requests.filter(isHead).count,1)
+        XCTAssertTrue(http.requests.allSatisfy { $0.httpMethod == "GET" })
+    }
+
     func testLibraryContinueCanOpenASeriesOutsideHomeAndWithAnEarlyCheckpoint() async throws {
         let http = AppModelHTTP(), model = try make(http)
         model.navigate("Anime Sync")
@@ -342,8 +361,8 @@ import Foundation
     func testNewEpisodeActionRetainsItsDeliberateNextEpisodeURL() async throws {
         let http = AppModelHTTP(), model = try make(http)
         http.respond = { _ in XCTFail("A deliberate new-episode selection must not become Continue"); return try self.reply([:]) }
-        await model.openLibraryCard(try card(continuing: false,hasNew: true,urlEpisode: "7"))
-        XCTAssertEqual(model.route.url?.query,"ep=7")
+        await model.openLibraryCard(try card(continuing: false,hasNew: true,urlEpisode: "6"))
+        XCTAssertEqual(model.route.url?.fragment,"anime-sync-id=21&anime-sync-ep=7")
         XCTAssertTrue(http.requests.isEmpty)
     }
 

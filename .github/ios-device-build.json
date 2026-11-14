@@ -1,5 +1,5 @@
 {
-  "version": "0.1.31",
-  "build": 33,
-  "reason": "Build 0.1.31 with credits, pending checkpoint, rewind, and website seek recovery coverage."
+  "version": "0.1.32",
+  "build": 34,
+  "reason": "Keep early saved episodes visible on Home and add the Anime Sync New Episodes row."
 }

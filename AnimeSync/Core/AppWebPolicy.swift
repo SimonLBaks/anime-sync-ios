@@ -20,7 +20,7 @@ enum AppWebPolicy {
         animeID.range(of: "^[0-9]{1,12}\\z", options: .regularExpression) != nil && episode.range(of: "^[0-9]{1,5}(\\.[0-9]{1,3})?\\z", options: .regularExpression) != nil
     }
     static func resume(position: Double, duration: Double, completed: Bool) -> TimeInterval {
-        guard !completed, position.isFinite, duration.isFinite, position >= 5, duration > position + 5 else { return 0 }
+        guard !completed, position.isFinite, duration.isFinite, position > 0, duration > position + 5 else { return 0 }
         return position
     }
     static func resolvedWatch(page: URL, target: URL, animeID: String, episode: String) -> Bool {

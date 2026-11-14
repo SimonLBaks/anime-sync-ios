@@ -253,9 +253,12 @@ struct TakeoverRequest: Identifiable {
         await continueWatching(animeID: entry.animeID)
     }
     func openLibraryCard(_ card: SyncLibraryCard) async {
-        // New episodes are a deliberate next-episode action. Continue is a
-        // series-head action and must not trust the dashboard's cached URL.
-        guard card.continuing, !card.hasNew else {
+        if card.hasNew {
+            guard let url = card.newEpisodeURL else { message = "Refresh this library entry before opening its episode."; return }
+            open(url); return
+        }
+        // Continue is a series-head action. Read the current episode before opening its route.
+        guard card.continuing else {
             guard let url = libraryWatchURL(card) else { message = "Refresh this library entry before opening its episode."; return }
             open(url); return
         }
@@ -272,7 +275,7 @@ struct TakeoverRequest: Identifiable {
         let key = card.id.split(separator: ":",omittingEmptySubsequences: false)
         let parameters = URLComponents(url: card.url,resolvingAgainstBaseURL: false)?.queryItems?.filter { $0.name == "ep" } ?? []
         guard key.count == 2, key[0] == "miruro", parameters.count <= 1 else { return nil }
-        let episode = parameters.first?.value ?? (card.hasNew ? card.nextEpisode : card.episode)
+        let episode = parameters.first?.value ?? card.episode
         guard AppWebPolicy.identity(animeID: String(key[1]),episode: episode), let id = Int64(key[1]) else { return nil }
         var target = URLComponents(string: "https://miruro.cx/search")!
         target.queryItems = [URLQueryItem(name: "q",value: card.title)]
@@ -691,7 +694,7 @@ struct TakeoverRequest: Identifiable {
         if showingSearchSuggestions, provider.currentURL != previewSearchURL { updateSearchSuggestions() }
         let showingProvider = !["Anime Sync","Settings","History"].contains(route.section) && !signingIn
         provider.refreshNetwork(reloadFailed: player == nil && showingProvider)
-        dashboard.refreshNetwork(reloadFailed: route.section == "Anime Sync" || signingIn)
+        dashboard.refreshNetwork(reloadFailed: route == .home || route.section == "Anime Sync" || signingIn)
         if let player {
             forwardNativeSubtitles(provider.subtitles)
             await player.foreground()
@@ -713,9 +716,10 @@ struct TakeoverRequest: Identifiable {
         try? await restoreConnection()
         guard active, route == expectedRoute, resolvingEpoch == epoch,
               sync.accountGeneration == account, !Task.isCancelled else { return }
-        if route.section == "Anime Sync" || signingIn {
+        if route == .home || route.section == "Anime Sync" || signingIn {
             dashboard.load(origin: sync.baseURL,accountGeneration: account)
-        } else if player == nil {
+        }
+        if route.section != "Anime Sync", !signingIn, player == nil {
             provider.reload()
         }
         let refreshed = await sync.refreshHistory(retryPending: true)

@@ -7,6 +7,7 @@ import re
 
 LIVE = 'testLiveMiruroCatalogueHeroAndSearchExtraction'
 FOCUSED_UNIT_CLASSES = {
+    'home-library': ('AppModelTests', 'ProtocolTests'),
     'library-resume': ('AppModelTests',),
     'connection-recovery': ('AppModelTests', 'NativePlaybackTests', 'NetworkRoutingTests', 'ProviderTests', 'ProtocolTests'),
     'episode-synopsis': ('AppModelTests',),
@@ -45,6 +46,7 @@ def scope(root, focus=''):
 def focused_unit_scope(root, focus, all_ui):
     classes = FOCUSED_UNIT_CLASSES[focus]
     ui = {
+        'home-library': ['testHomeContinueBelowHeroThreePostersAndSeparateHistoryTen'],
         'episode-synopsis': ['testEpisodeSynopsisScrollsInPortraitAndLandscape'],
         'search-suggestions': ['testLiveSearchSuggestionsAndViewAll'],
     }.get(focus, [])
