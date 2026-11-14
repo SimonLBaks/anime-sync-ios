@@ -1,5 +1,5 @@
 {
   "version": "0.1.31",
   "build": 33,
-  "reason": "Build 0.1.31 and verify credits, pending checkpoint, and cross-device rewind recovery."
+  "reason": "Build 0.1.31 with credits, pending checkpoint, rewind, and website seek recovery coverage."
 }
