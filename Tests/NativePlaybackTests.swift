@@ -952,6 +952,30 @@ import CoreMedia
         XCTAssertEqual(writes,[250,251],"The positioned item can continue syncing normally")
     }
 
+    func testRetryOfInterruptedFirstStartCanBeginWithoutAProgressRow() async throws {
+        let http = PlaybackHTTP(), seekGate = gate("first seek is interrupted")
+        var generation: Int64 = 0
+        var seeks: [Double] = []
+        http.respond = { request in
+            if request.url?.path == "/api/playback" { generation += 1 }
+            return try self.reply(["sync": .object(["generation": .integer(generation)]),"progress": .null])
+        }
+        let model = try make(http,clock: { (position: 0,duration: 1000) },seek: { _, time in
+            seeks.append(time)
+            if seeks.count == 1 { await seekGate.wait() }
+        })
+        let first = Task { await model.play(explicit: true) }; tasks.append(first)
+        await fulfillment(of: [seekGate.started],timeout: 2)
+        await model.background()
+        seekGate.open(); await first.value
+        XCTAssertNil(model.lease)
+        XCTAssertFalse(http.requests.contains { $0.httpMethod == "POST" && $0.url?.path == "/api/progress" })
+
+        await model.play(explicit: true)
+        XCTAssertEqual(model.lease?.generation,2)
+        XCTAssertEqual(seeks,[0,0],"A startup interrupted before any clock sample must still be able to play a new episode")
+    }
+
     func testManualPauseSurvivesForegroundAndTheNextPlayResolvesFreshSource() async throws {
         let http = PlaybackHTTP(), asset = try silentAudioAsset()
         defer { try? FileManager.default.removeItem(at: asset) }

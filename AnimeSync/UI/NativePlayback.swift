@@ -489,7 +489,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
         let signedIn = sync.isSignedIn, account = sync.accountGeneration
         let requiresOwnedResume = signedIn && expectedGeneration != nil
         let outgoing = previousLease
-        let resumeOpenPlayer = !reachedEnd && (outgoing?.accountEpoch == account || reconnectCheckpoint?.account == account)
+        let resumeOpenPlayer = !reachedEnd && reconnectCheckpoint?.account == account
         let chosenPosition = explicitPosition ?? (reachedEnd ? 0 : nil)
         if requiresOwnedResume { knownCheckpointAccount = account }
         let cachedCheckpoint = (sync.episodeProgress(animeID: metadata.animeID,episode: metadata.episode) ?? 0) > 0

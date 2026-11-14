@@ -32,6 +32,7 @@ import WebKit
     var onFixtureBrowse: ((String, URL) -> Void)?
     var onFixtureEpisode: ((String) -> Void)?
     var onFixtureSourceChoice: ((String) -> Bool)?
+    var onFixtureBrowserResume: ((TimeInterval, UInt64) -> Void)?
 
     private let receiver = ScriptReceiver()
     private let fixture: Bool
@@ -351,7 +352,8 @@ import WebKit
     }
     func pause() { if !fixture { evaluate("window.AnimeTvPage?.pause()") } }
     func resumeBrowser(seconds: TimeInterval, revision: UInt64) {
-        guard seconds.isFinite, seconds >= 0, !fixture else { return }
+        guard seconds.isFinite, seconds >= 0 else { return }
+        if fixture { onFixtureBrowserResume?(seconds, revision); return }
         evaluate("window.AnimeTvPage?.resumeBrowser(\(seconds),true,\(revision))")
     }
     func browserCommand(_ command: String, amount: Double = 0) {
