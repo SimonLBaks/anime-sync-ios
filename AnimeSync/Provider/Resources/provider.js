@@ -2,6 +2,7 @@
   if(window.AnimeTvPage)return;
   const send=data=>window.AnimeTv?.postMessage(JSON.stringify({selection:window.AnimeSyncMediaSelection?.()||'',...data,page:location.href}));
   let route='', metadata=null, restored=false, lastSent=0, pausedForNative=false;
+  let syncedPlayer=null,syncedRevision=null;
   const observed=new Set();
   let customState=new WeakMap();
   let nativeMode=false,catalogueSignature='',heroSignature='';
@@ -378,6 +379,12 @@
     const current={...previous,...detail};customState.set(v,current);
     const position=Number(v.tagName==='VIDEO'?v.currentTime:current.currentTime??current.time),duration=Number(v.tagName==='VIDEO'?v.duration:current.duration);
     const playing=v.tagName==='VIDEO'?!v.paused&&!v.ended:current.state==='playing';
+    if(resuming)return;
+    if(!nativeMode&&syncedPlayer&&v!==syncedPlayer){
+      if(syncedPlayer.isConnected||!(event==='play'||event==='strmcx-state-change'&&playing))return;
+      syncedPlayer=null;
+      send({type:'playback-resume-failed',revision:syncedRevision});
+    }
     if(!nativeMode&&metadata&&(event==='play'||event==='strmcx-state-change'&&playing)){
       pausedForNative=false;send({type:'playback-start',metadata,explicit:Date.now()-gestureAt<10000});
     }
@@ -394,7 +401,7 @@
     send({type:'progress',metadata,position,duration,ended,playing});
   }
   function scan(){
-    if(route!==location.href){resumeEpoch++;resuming=false;if(!nativeMode)pausedForNative=false;route=location.href;metadata=null;restored=false;observed.clear();customState=new WeakMap();send({type:'route',url:route});}
+    if(route!==location.href){resumeEpoch++;resuming=false;syncedPlayer=null;syncedRevision=null;if(!nativeMode)pausedForNative=false;route=location.href;metadata=null;restored=false;observed.clear();customState=new WeakMap();send({type:'route',url:route});}
     resolveSearch();const next=pageData();
     if(next){const {description,...identity}=next;metadata=identity;send({type:'metadata',metadata:next});}
     catalogue();searchSuggestions();episodes();seasonChoices();if(nativeMode&&metadata&&!sourceOptionsLoaded&&document.querySelector('button[aria-label="Provider"]')){sourceOptionsLoaded=true;collectSourceChoices();}
@@ -411,17 +418,24 @@
       metrics(v);
     }
   }
-  function resumeBrowserTo(position,autoplay=false){
+  function resumeBrowserTo(position,autoplay=false,revision=null){
     if(!Number.isFinite(position)||position<0)return;
-    const list=players(),primary=list.find(v=>v.tagName==='STRMCX-EMBED')||list[0];if(!primary)return;
+    const list=players(),primary=list.find(v=>v.tagName==='STRMCX-EMBED')||list[0];
+    if(!primary){if(revision!==null)send({type:'playback-resume-failed',revision});return;}
     const epoch=++resumeEpoch,started=Date.now();resuming=true;pausedForNative=true;restored=true;
-    for(const v of list){if(typeof v.seek==='function')v.seek(position);else v.currentTime=position;}
+    if(revision!==null){syncedPlayer=primary;syncedRevision=revision;}
+    for(const v of revision===null?list:[primary])try{if(typeof v.seek==='function')v.seek(position);else v.currentTime=position;}catch{}
     const acknowledge=()=>{if(epoch!==resumeEpoch)return;const state=customState.get(primary)||{};
-      const actual=Number(primary.tagName==='VIDEO'?primary.currentTime:state.currentTime??state.time??primary.currentTime);
-      if(Number.isFinite(actual)&&Math.abs(actual-position)<=2+(Date.now()-started)/1000){resuming=false;pausedForNative=false;
-        if(autoplay){try{const result=primary.play?.();result?.catch?.(()=>send({type:'playback-resume-failed'}));}catch{send({type:'playback-resume-failed'});}}return;}
+      const native=primary.tagName==='VIDEO';
+      const actual=Number(native?primary.currentTime:state.currentTime??state.time??primary.currentTime);
+      const duration=Number(native?primary.duration:state.duration??primary.duration);
+      const tolerance=revision===null?2+(Date.now()-started)/1000:Math.min(1,Math.max(.001,position/10));
+      if(Number.isFinite(actual)&&Number.isFinite(duration)&&duration>0&&position<=duration&&actual>=0
+          &&(!native||!primary.seeking)&&Math.abs(actual-position)<=tolerance){resuming=false;pausedForNative=false;
+        if(revision!==null&&metadata)send({type:'playback-resume-confirmed',metadata,revision});
+        if(autoplay){try{const result=primary.play?.();result?.catch?.(()=>send({type:'playback-resume-failed',revision}));}catch{send({type:'playback-resume-failed',revision});}}return;}
       if(Date.now()-started<5000){setTimeout(acknowledge,40);return;}
-      resuming=false;for(const v of list)v.pause?.();send({type:'playback-resume-failed'});
+      resuming=false;for(const v of list)v.pause?.();send({type:'playback-resume-failed',revision});
     };acknowledge();
   }
   window.AnimeTvPage={
@@ -430,14 +444,14 @@
     browseMode(value){appBrowse=!!value;},
     openPanel(name){let attempts=0;const open=()=>{const button=document.querySelector('aside[style*="site-rail"] button[aria-label="'+name+'"]');
       if(button){button.click();setTimeout(()=>navigate(0),200);}else if(++attempts<10)setTimeout(open,200);};setTimeout(open,300);},
-    nativeMode(value){nativeMode=!!value;if(nativeMode){resumeEpoch++;resuming=false;}if(!nativeMode)pausedForNative=false;catalogueSignature='';heroSignature='';suggestionSignature='';scan();},
+    nativeMode(value){nativeMode=!!value;if(nativeMode){resumeEpoch++;resuming=false;syncedPlayer=null;syncedRevision=null;}if(!nativeMode)pausedForNative=false;catalogueSignature='';heroSignature='';suggestionSignature='';scan();},
     selectEpisode(id){episodeControls.get(id)?.click();},
     sourceChoices:collectSourceChoices,selectSource,
-    pause(){resumeEpoch++;resuming=false;for(const v of players()){if(typeof v.pause==='function')v.pause();if(!nativeMode&&metadata)metrics(v,{state:'paused'},'pause');}pausedForNative=true;},
+    pause(){resumeEpoch++;resuming=false;for(const v of players()){if(typeof v.pause==='function')v.pause();if(!nativeMode&&metadata)metrics(v,{state:'paused'},'pause');}syncedPlayer=null;syncedRevision=null;pausedForNative=true;},
     handoff(id){
       if(resuming){send({type:'handoff-ready',id,paused:false});return;}
       const sample=v=>{const state=customState.get(v)||{};return {position:Number(v.tagName==='VIDEO'?v.currentTime:state.currentTime??state.time??v.currentTime),duration:Number(v.tagName==='VIDEO'?v.duration:state.duration??v.duration),paused:typeof v.paused==='boolean'?v.paused:state.state==='paused',ended:!!v.ended||state.ended===true};};
-      const player=players().find(v=>{const s=sample(v);return Number.isFinite(s.duration)&&s.duration>0;});
+      const player=syncedPlayer?.isConnected?syncedPlayer:players().find(v=>{const s=sample(v);return Number.isFinite(s.duration)&&s.duration>0;});
       if(!player||!metadata){send({type:'handoff-ready',id,paused:false});return;}
       pausedForNative=true;player.pause?.();let attempts=0;
       const finish=()=>{const state=sample(player);if(!state.paused&&++attempts<35){setTimeout(finish,40);return;}send({type:'handoff-ready',id,metadata,...state});};finish();

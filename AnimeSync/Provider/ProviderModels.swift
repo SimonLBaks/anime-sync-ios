@@ -248,9 +248,10 @@ struct BrowserHandoffSnapshot {
 }
 enum BrowserPlaybackEvent {
     case started(AnimeMetadata, explicit: Bool)
+    case resumed(AnimeMetadata, revision: UInt64)
     case progress(AnimeMetadata, position: TimeInterval, duration: TimeInterval, ended: Bool, playing: Bool)
     case stopped(AnimeMetadata, position: TimeInterval, duration: TimeInterval, ended: Bool)
-    case resumeFailed
+    case resumeFailed(revision: UInt64?)
     case routeChanged(URL)
 }
 enum ProviderFailure: LocalizedError {

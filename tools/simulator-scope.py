@@ -8,7 +8,7 @@ import re
 LIVE = 'testLiveMiruroCatalogueHeroAndSearchExtraction'
 FOCUSED_UNIT_CLASSES = {
     'library-resume': ('AppModelTests',),
-    'connection-recovery': ('AppModelTests', 'NativePlaybackTests', 'NetworkRoutingTests', 'ProviderTests'),
+    'connection-recovery': ('AppModelTests', 'NativePlaybackTests', 'NetworkRoutingTests', 'ProviderTests', 'ProtocolTests'),
     'episode-synopsis': ('AppModelTests',),
     'search-suggestions': ('AppModelTests',),
 }

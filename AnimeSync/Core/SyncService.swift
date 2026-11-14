@@ -183,21 +183,52 @@ import Combine
         } }
         catch CoreError.unauthorized { if epoch == accountEpoch { clearUnauthorized() }; throw CoreError.unauthorized }
     }
-    func begin(metadata: AnimeMetadata, explicit: Bool, expectedSourceGeneration: Int64? = nil) async throws -> PlaybackStart {
+    func begin(metadata: AnimeMetadata, explicit: Bool, expectedSourceGeneration: Int64? = nil,
+               resumeOpenPlayer: Bool = false, previousLease: PlaybackLease? = nil) async throws -> PlaybackStart {
         guard metadata.isValid else { throw CoreError.invalidMetadata }
         guard !token.isEmpty else { return PlaybackStart(allowed: true, lease: nil, resumePosition: nil, message: nil) }
         let epoch = accountEpoch
         do { return try await queue.run { [self] in
-            try sameAccount(epoch); await flushPendingLocked(); try sameAccount(epoch)
+            try sameAccount(epoch)
+            let outgoing = previousLease.flatMap { $0.accountEpoch == epoch ? $0 : nil }
+            if let outgoing { await flushPendingLocked(keys: [pendingPrefix + outgoing.id]) }
+            else { await flushPendingLocked() }
+            try sameAccount(epoch)
             let (_, snapshot) = try await head(metadata, epoch: epoch)
             if let expected = expectedSourceGeneration, expected != snapshot.generation { throw CoreError.conflict("Playback continued on another device. Press Play to resume its latest position.") }
             if !explicit && !(snapshot.sessionID ?? "").isEmpty { throw CoreError.conflict("Press Play to continue on this device") }
+            if let outgoing {
+                let key = pendingPrefix + outgoing.id
+                if let unsent = preferences.data(forKey: key) {
+                    if outgoing.generation == snapshot.generation {
+                        status = "Progress saved here; retrying when connected"
+                        return PlaybackStart(allowed: false, lease: nil, resumePosition: nil,
+                                             message: "Your position is saved on this device. Press Play to retry syncing.")
+                    }
+                    // A newer head makes the old packet stale even if the write
+                    // endpoint was unavailable when we tried to send it.
+                    preferences.set(unsent, forKey: heldPrefix + key)
+                    preferences.removeObject(forKey: key)
+                }
+            }
             let id = UUID().uuidString
             let reply = try await authorized("/api/playback", body: ["site": .string("miruro"), "anime_id": .string(metadata.animeID), "episode": .string(metadata.episode), "device_id": .string(deviceID), "playback_session_id": .string(id), "expected_generation": .integer(snapshot.generation)], epoch: epoch)
             guard let sync = reply["sync"]?.object, let generation = sync["generation"]?.integer, generation >= 0 else { throw CoreError.invalidResponse }
+            let position: TimeInterval?
+            if resumeOpenPlayer {
+                guard let saved = reply["progress"]?.object, let time = saved["current_time"]?.double,
+                      let duration = saved["duration"]?.double, time.isFinite, duration.isFinite,
+                      duration > 0, time >= 0, time <= duration else {
+                    return PlaybackStart(allowed: false, lease: nil, resumePosition: nil,
+                                         message: "Could not confirm the synced position. Press Play to try again.")
+                }
+                position = time
+            } else {
+                position = reply["progress"]?.object.map {
+                    AppWebPolicy.resume(position: $0["current_time"]?.double ?? 0, duration: $0["duration"]?.double ?? 0, completed: $0["completed"]?.bool ?? false)
+                }
+            }
             let lease = PlaybackLease(id: id, generation: generation, accountEpoch: epoch); players[id] = lease
-            let saved = reply["progress"]?.object
-            let position = saved.map { AppWebPolicy.resume(position: $0["current_time"]?.double ?? 0, duration: $0["duration"]?.double ?? 0, completed: $0["completed"]?.bool ?? false) }
             status = "Synced with Anime Sync"
             return PlaybackStart(allowed: true, lease: lease, resumePosition: position, message: nil)
         }} catch CoreError.conflict(let message) { status = message; return PlaybackStart(allowed: false, lease: nil, resumePosition: nil, message: message) }
@@ -207,24 +238,28 @@ import Combine
     }
     func release(_ lease: PlaybackLease?) { if let lease = lease, players[lease.id] === lease { players.removeValue(forKey: lease.id) } }
     func progress(metadata: AnimeMetadata, lease: PlaybackLease?, position: TimeInterval, duration: TimeInterval, ended: Bool = false) async {
-        guard metadata.isValid, position.isFinite, duration.isFinite, duration > 0, position >= 0, position <= duration + 60 else { return }
-        if let lease = lease, !lease.isValid || lease.accountEpoch != accountEpoch { return }
+        guard enqueueProgress(metadata: metadata,lease: lease,position: position,duration: duration,ended: ended) else { return }
+        await flushPending()
+    }
+    @discardableResult func enqueueProgress(metadata: AnimeMetadata, lease: PlaybackLease?, position: TimeInterval, duration: TimeInterval, ended: Bool = false) -> Bool {
+        guard metadata.isValid, position.isFinite, duration.isFinite, duration > 0, position >= 0, position <= duration + 60 else { return false }
+        if let lease = lease, !lease.isValid || lease.accountEpoch != accountEpoch { return false }
         var payload = metadata.json; payload["device_id"] = .string(deviceID); payload["current_time"] = .number(position)
         payload["duration"] = .number(duration); payload["completed"] = .bool(ended || position / duration >= 0.9)
         guard let lease = lease, let sequence = lease.nextSequence() else {
             if let data = try? JSONEncoder().encode(payload) { preferences.set(data, forKey: heldPrefix + metadata.animeID + ":" + metadata.episode) }
-            return
+            return false
         }
         payload["sync_protocol"] = .integer(2); payload["playback_session_id"] = .string(lease.id)
         payload["playback_generation"] = .integer(lease.generation); payload["playback_sequence"] = .integer(sequence)
-        guard let data = try? JSONEncoder().encode(payload) else { return }
+        guard let data = try? JSONEncoder().encode(payload) else { return false }
         preferences.set(data, forKey: pendingPrefix + lease.id)
-        _ = try? await queue.run { [self] in await flushPendingLocked() }
+        return true
     }
     private func pendingKeys() -> [String] { preferences.dictionaryRepresentation().keys.filter { $0.hasPrefix(pendingPrefix) }.sorted() }
-    private func flushPendingLocked() async {
+    private func flushPendingLocked(keys: [String]? = nil) async {
         guard !token.isEmpty else { return }; let epoch = accountEpoch
-        for key in pendingKeys() {
+        for key in keys ?? pendingKeys() {
             guard let snapshot = preferences.data(forKey: key) else { continue }
             guard let body = try? JSONValue.parseObject(snapshot) else { preferences.set(snapshot, forKey: heldPrefix + key); preferences.removeObject(forKey: key); continue }
             guard body["sync_protocol"]?.integer == 2 else { preferences.set(snapshot, forKey: heldPrefix + key); if preferences.data(forKey: key) == snapshot { preferences.removeObject(forKey: key) }; continue }

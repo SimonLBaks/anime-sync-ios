@@ -350,9 +350,9 @@ import WebKit
         open(url: url, native: false)
     }
     func pause() { if !fixture { evaluate("window.AnimeTvPage?.pause()") } }
-    func resumeBrowser(seconds: TimeInterval) {
+    func resumeBrowser(seconds: TimeInterval, revision: UInt64) {
         guard seconds.isFinite, seconds >= 0, !fixture else { return }
-        evaluate("window.AnimeTvPage?.resumeBrowser(\(seconds),true)")
+        evaluate("window.AnimeTvPage?.resumeBrowser(\(seconds),true,\(revision))")
     }
     func browserCommand(_ command: String, amount: Double = 0) {
         guard ["play", "pause", "toggle", "seek", "seek_to"].contains(command), amount.isFinite, !fixture else { return }
@@ -550,6 +550,11 @@ import WebKit
             if websiteMode, let url = packet["url"]?.string.flatMap(URL.init(string:)), AppWebPolicy.isProvider(url) { onWatchRequested?(url) }
         case "playback-start":
             if websiteMode, let item = packet["metadata"]?.object.flatMap(validBrowserMetadata) { onBrowserPlayback?(.started(item, explicit: packet["explicit"]?.bool == true)) }
+        case "playback-resume-confirmed":
+            if websiteMode, let item = packet["metadata"]?.object.flatMap(validBrowserMetadata),
+               let revision = packet["revision"]?.integer, revision >= 0 {
+                onBrowserPlayback?(.resumed(item, revision: UInt64(revision)))
+            }
         case "progress", "playback-stop":
             guard websiteMode, let item = packet["metadata"]?.object.flatMap(validBrowserMetadata),
                   let position = packet["position"]?.double, let duration = packet["duration"]?.double,
@@ -557,7 +562,9 @@ import WebKit
             let ended = packet["ended"]?.bool == true
             if type == "progress" { onBrowserPlayback?(.progress(item, position: position, duration: duration, ended: ended, playing: packet["playing"]?.bool == true)) }
             else { onBrowserPlayback?(.stopped(item, position: position, duration: duration, ended: ended)) }
-        case "playback-resume-failed": onBrowserPlayback?(.resumeFailed)
+        case "playback-resume-failed":
+            let revision = packet["revision"]?.integer.flatMap { $0 >= 0 ? UInt64($0) : nil }
+            onBrowserPlayback?(.resumeFailed(revision: revision))
         case "handoff-ready":
             guard let pending = handoff, packet["id"]?.string == pending.id, pending.nonce == documentNonce else { return }
             guard packet["paused"]?.bool == true, let item = packet["metadata"]?.object.flatMap(validBrowserMetadata),

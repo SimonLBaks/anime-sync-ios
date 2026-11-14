@@ -50,6 +50,8 @@ struct TakeoverRequest: Identifiable {
     private var pendingResume: ResumeSnapshot?
     private var pendingSourceGeneration: Int64?
     private var browserLease: PlaybackLease?
+    private var browserContinuation: (metadata: AnimeMetadata, account: UInt64, lease: PlaybackLease?, positioned: Bool, ended: Bool)?
+    private var browserCheckpoint: (position: TimeInterval, duration: TimeInterval)?
     private var browserMetadata: AnimeMetadata?
     private var browserEpoch: UInt64 = 0
     private var browserStarting = false
@@ -131,7 +133,9 @@ struct TakeoverRequest: Identifiable {
             player.updateSegments(source.segments)
         }.store(in: &subscriptions)
         sync.onOwnershipLost = { [weak self] lease in
-            guard let self, self.browserLease === lease else { return }; self.clearBrowser(); self.message = "Playback continued on another device. Press Play to resume here."
+            guard let self, self.browserLease === lease else { return }
+            self.clearBrowser(retainContinuation: true)
+            self.message = "Playback continued on another device. Press Play to resume here."
         }
         sync.$isSignedIn.dropFirst().sink { [weak self] signedIn in
             if !signedIn { self?.clearSelection(); self?.clearBrowser() }
@@ -577,11 +581,13 @@ struct TakeoverRequest: Identifiable {
         resolvingEpoch &+= 1; pendingPlay = false; pendingNextIdentity = nil; pendingResume = nil; pendingSourceGeneration = nil; pendingTVLease = nil; pendingTVEpisode = nil; selectedSourceID = ""
         launchTicket = nil; launchTask?.cancel(); launchTask = nil
     }
-    private func clearBrowser(pause: Bool = true,cancelStart: Bool = true) {
+    private func clearBrowser(pause: Bool = true,cancelStart: Bool = true,retainContinuation: Bool = false) {
         browserEpoch &+= 1
         if cancelStart { browserStartTask?.cancel(); browserStartTask = nil }
         browserStarting = false; browserReady = false; browserLocalOnly = false
         sync.release(browserLease); browserLease = nil; browserMetadata = nil
+        browserCheckpoint = nil
+        if !retainContinuation { browserContinuation = nil }
         if pause { provider.pause() }
     }
     private func receiveBrowser(_ event: BrowserPlaybackEvent) {
@@ -594,8 +600,10 @@ struct TakeoverRequest: Identifiable {
         case .routeChanged(let url):
             clearSelection(); clearBrowser()
             if route.website || route.section == "Episode" { route.url = url }
-        case .resumeFailed:
-            guard route.website else { return }; clearBrowser(); message = "The website player could not resume. Press Play to try again."
+        case .resumeFailed(let revision):
+            guard route.website, revision == nil || revision == browserEpoch else { return }
+            clearBrowser(retainContinuation: true)
+            message = "The website player could not resume. Press Play to try again."
         default: Task { [weak self] in await self?.browser(event) }
         }
     }
@@ -603,30 +611,55 @@ struct TakeoverRequest: Identifiable {
         switch event {
         case .started(let metadata,let explicit):
             guard active, route.website, !signingIn, provider.metadata == metadata else { return }
-            clearBrowser(pause: false,cancelStart: false); let epoch = browserEpoch, routeEpoch = resolvingEpoch, account = sync.accountGeneration
+            clearBrowser(pause: false,cancelStart: false,retainContinuation: true)
+            let epoch = browserEpoch, routeEpoch = resolvingEpoch, account = sync.accountGeneration
+            let prior = browserContinuation.flatMap { $0.account == account && $0.metadata == metadata ? $0 : nil }
             browserMetadata = metadata; browserStarting = true
             // The pause event caused by this gate cannot write an unowned progress sample.
             provider.pause()
-            do { let start = try await sync.begin(metadata: metadata,explicit: explicit)
+            do { let start = try await sync.begin(metadata: metadata,explicit: explicit,
+                                                  resumeOpenPlayer: prior.map { $0.positioned && !$0.ended } ?? false,
+                                                  previousLease: prior?.lease)
                 guard !Task.isCancelled, active, epoch == browserEpoch, routeEpoch == resolvingEpoch,
                       account == sync.accountGeneration, route.website, provider.metadata == metadata else { sync.release(start.lease); return }
                 browserStarting = false
                 guard start.allowed else { browserMetadata = nil; message = start.message; return }
-                browserLease = start.lease; browserLocalOnly = start.lease == nil; browserReady = true
-                provider.resumeBrowser(seconds: start.resumePosition ?? 0)
+                if prior?.lease != nil && start.lease == nil {
+                    browserMetadata = nil
+                    message = "Could not confirm the synced position. Press Play to try again."
+                    return
+                }
+                browserLease = start.lease; browserLocalOnly = start.lease == nil
+                browserContinuation = (metadata,account,start.lease,prior?.positioned == true && prior?.ended != true,false)
+                provider.resumeBrowser(seconds: prior?.ended == true ? 0 : start.resumePosition ?? 0, revision: epoch)
             } catch {
-                if epoch == browserEpoch, routeEpoch == resolvingEpoch, !Task.isCancelled { clearBrowser(); message = error.localizedDescription }
+                if epoch == browserEpoch, routeEpoch == resolvingEpoch, !Task.isCancelled {
+                    clearBrowser(retainContinuation: true)
+                    message = error.localizedDescription
+                }
             }
+        case .resumed(let metadata,let revision):
+            guard active, route.website, !browserStarting, browserEpoch == revision, browserMetadata == metadata,
+                  provider.metadata == metadata, browserLease != nil || browserLocalOnly else { return }
+            browserReady = true
         case .progress(let metadata,let position,let duration,let ended,let playing):
             guard active, route.website, !browserStarting, browserReady, browserMetadata == metadata,
                   provider.metadata == metadata, browserLease != nil || browserLocalOnly, !handingOff else { return }
             let owner = browserLease
-            if !playing || ended { clearBrowser(pause: false) }
+            browserCheckpoint = (position,duration)
+            browserContinuation?.positioned = true
+            if !playing || ended {
+                browserContinuation?.ended = ended
+                clearBrowser(pause: false,retainContinuation: true)
+            }
             await sync.progress(metadata: metadata,lease: owner,position: position,duration: duration,ended: ended)
         case .stopped(let metadata,let position,let duration,let ended):
             guard active, route.website, !browserStarting, browserReady, browserMetadata == metadata,
                   provider.metadata == metadata, browserLease != nil || browserLocalOnly, !handingOff else { return }
-            let owner = browserLease; clearBrowser(pause: false)
+            let owner = browserLease
+            browserContinuation?.positioned = true
+            browserContinuation?.ended = ended
+            clearBrowser(pause: false,retainContinuation: true)
             await sync.progress(metadata: metadata,lease: owner,position: position,duration: duration,ended: ended)
         default: break
         }
@@ -637,11 +670,16 @@ struct TakeoverRequest: Identifiable {
         active = false; sceneGeneration &+= 1
         searchDelay?.cancel(); searchDelay = nil
         connectionRecovery?.task.cancel(); connectionRecovery = nil
-        clearSelection(); clearBrowser(); tv.stopPolling(); discovery.stop(); dashboard.pause()
+        let flushBrowser = route.website && browserReady && !handingOff && (browserLease != nil || browserLocalOnly) &&
+            browserMetadata.flatMap { item in
+                browserCheckpoint.map { sync.enqueueProgress(metadata: item,lease: browserLease,position: $0.position,duration: $0.duration) }
+            } == true
+        clearSelection(); clearBrowser(retainContinuation: route.website); tv.stopPolling(); discovery.stop(); dashboard.pause()
         // The background transition invalidates pending launches, while this
         // same player's caption scope survives. Actual navigation still fences it.
         if preserveCaptions, let context = captionContext { nativeSubtitleContext = (context.player,resolvingEpoch,context.account,context.source) }
         if let player { await player.background() }
+        if flushBrowser { await sync.flushPending() }
     }
     func foreground() async {
         active = true; tv.startPolling()

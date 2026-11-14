@@ -53,9 +53,9 @@ import CoreMedia
     private func reply(_ object: JSONObject, status: Int = 200) throws -> HTTPReply {
         HTTPReply(status: status,body: try JSONEncoder().encode(object))
     }
-    private func snapshot(_ generation: Int64, session: String = "", position: TimeInterval = 120) -> JSONObject {
+    private func snapshot(_ generation: Int64, session: String = "", position: TimeInterval = 120, completed: Bool = false) -> JSONObject {
         ["sync": .object(["generation": .integer(generation),"session_id": .string(session)]),
-         "progress": .object(["current_time": .number(position),"duration": .number(1000),"completed": .bool(false)])]
+         "progress": .object(["current_time": .number(position),"duration": .number(1000),"completed": .bool(completed)])]
     }
     private func make(_ http: PlaybackHTTP, fixture: Bool = false, metadata item: AnimeMetadata? = nil, generation: Int64? = nil, captionTransport: HTTPTransport? = nil, clock: (() -> (position: TimeInterval,duration: TimeInterval))? = nil, seek: ((AVPlayer,TimeInterval) async -> Void)? = nil, startupSeekTimeout: TimeInterval = 12, itemFactory: ((MediaSource) async throws -> AVPlayerItem)? = nil) throws -> NativePlaybackModel {
         let name = "qa-ios-player-" + UUID().uuidString
@@ -804,6 +804,152 @@ import CoreMedia
         XCTAssertEqual(payload["playback_generation"]?.integer,oldLease.generation)
         XCTAssertEqual(payload["playback_sequence"]?.integer,1)
         await model.close()
+    }
+
+    func testReconnectingNearTheEndKeepsTheCheckpointWhileAFreshReplayStartsAtZero() async throws {
+        let http = PlaybackHTTP()
+        var generation: Int64 = 1
+        var savedPosition: TimeInterval = 120, position: TimeInterval = 0
+        var completed = false
+        var seeks: [TimeInterval] = []
+        http.respond = { request in
+            if request.url?.path == "/api/playback" { generation += 1 }
+            if request.httpMethod == "POST", request.url?.path == "/api/progress" {
+                let body = try self.object(request)
+                savedPosition = try XCTUnwrap(body["current_time"]?.double)
+                completed = try XCTUnwrap(body["completed"]?.bool)
+            }
+            return try self.reply(self.snapshot(generation,position: savedPosition,completed: completed))
+        }
+        let model = try make(http,clock: { (position,1000) },seek: { _, target in
+            seeks.append(target)
+            position = target
+        })
+        await model.play(explicit: true)
+        position = 950
+        await model.background()
+        XCTAssertEqual(savedPosition,950)
+        XCTAssertTrue(completed,"A partially played ending is marked watched for the library")
+        await model.foreground()
+        XCTAssertEqual(seeks,[120,950])
+        await model.close()
+        XCTAssertEqual(savedPosition,950)
+
+        let replay = try make(http,clock: { (position,1000) },seek: { _, target in
+            seeks.append(target)
+            position = target
+        })
+        await replay.play(explicit: true)
+        XCTAssertEqual(seeks,[120,950,0],"Opening a new player can intentionally replay a watched episode")
+    }
+
+    func testSameOwnerReconnectWaitsForAnUnsentRewindBeforeClaiming() async throws {
+        let http = PlaybackHTTP(), asset = try silentAudioAsset()
+        defer { try? FileManager.default.removeItem(at: asset) }
+        var generation: Int64 = 1
+        var position: TimeInterval = 0, savedPosition: TimeInterval = 600
+        var allowProgress = false
+        var writes: [TimeInterval] = [], seeks: [TimeInterval] = []
+        http.respond = { request in
+            if request.url?.path == "/api/playback" { generation += 1 }
+            if request.httpMethod == "POST", request.url?.path == "/api/progress" {
+                let body = try self.object(request)
+                let at = try XCTUnwrap(body["current_time"]?.double)
+                XCTAssertEqual(body["playback_generation"]?.integer,2)
+                writes.append(at)
+                guard allowProgress else { throw URLError(.networkConnectionLost) }
+                savedPosition = at
+            }
+            return try self.reply(self.snapshot(generation,position: savedPosition))
+        }
+        let model = try make(http,clock: { (position,1000) },seek: { _, target in
+            seeks.append(target)
+            position = target
+        },itemFactory: { _ in AVPlayerItem(url: asset) })
+        model.refreshSource = { ($0,[]) }
+        await model.play(explicit: true)
+        model.videoReady = true
+        await model.seek(to: 240)
+        await model.background()
+        XCTAssertFalse(writes.isEmpty)
+        XCTAssertTrue(writes.allSatisfy { $0 == 240 })
+        await model.foreground()
+        XCTAssertNil(model.lease)
+        XCTAssertEqual(generation,2,"A reachable claim endpoint must not supersede the unacknowledged save")
+        XCTAssertEqual(seeks,[600,240])
+        await model.play(explicit: true)
+        XCTAssertNil(model.lease)
+        XCTAssertEqual(generation,2)
+        allowProgress = true
+        await model.play(explicit: true)
+        XCTAssertEqual(savedPosition,240)
+        XCTAssertEqual(model.lease?.generation,3)
+        XCTAssertEqual(seeks,[600,240,240],"A confirmed rewind must survive an interrupted final save")
+        http.respond = { _ in try self.reply(["ok": .bool(true)]) }
+    }
+
+    func testManualReconnectUsesTheNewOwnerPositionEvenWhenMarkedWatched() async throws {
+        let http = PlaybackHTTP()
+        var generation: Int64 = 1
+        var savedPosition: TimeInterval = 120, position: TimeInterval = 0
+        var completed = false
+        var seeks: [TimeInterval] = []
+        http.respond = { request in
+            if request.url?.path == "/api/playback" { generation += 1 }
+            if request.httpMethod == "POST", request.url?.path == "/api/progress" {
+                savedPosition = try XCTUnwrap(self.object(request)["current_time"]?.double)
+            }
+            return try self.reply(self.snapshot(generation,position: savedPosition,completed: completed))
+        }
+        let model = try make(http,clock: { (position,1000) },seek: { _, target in
+            seeks.append(target)
+            position = target
+        })
+        await model.play(explicit: true)
+        position = 995
+        await model.background()
+        generation = 8
+        savedPosition = 930
+        completed = true
+        await model.foreground()
+        XCTAssertEqual(seeks,[120])
+        XCTAssertNil(model.lease)
+        XCTAssertEqual(generation,8)
+
+        await model.play(explicit: true)
+        XCTAssertEqual(seeks,[120,930],"After a takeover the newer owner's saved position wins, including a rewind")
+        XCTAssertEqual(model.lease?.generation,9)
+    }
+
+    func testReconnectCannotSaveZeroWhileTheNewItemsClockSettles() async throws {
+        let http = PlaybackHTTP(), asset = try silentAudioAsset()
+        defer { try? FileManager.default.removeItem(at: asset) }
+        var generation: Int64 = 1
+        var position: TimeInterval = 0, savedPosition: TimeInterval = 120
+        var writes: [TimeInterval] = [], seeks: [TimeInterval] = []
+        http.respond = { request in
+            if request.url?.path == "/api/playback" { generation += 1 }
+            if request.httpMethod == "POST", request.url?.path == "/api/progress" {
+                savedPosition = try XCTUnwrap(self.object(request)["current_time"]?.double)
+                writes.append(savedPosition)
+            }
+            return try self.reply(self.snapshot(generation,position: savedPosition))
+        }
+        let model = try make(http,clock: { (position,1000) },seek: { _, target in
+            seeks.append(target)
+            position = seeks.count == 1 ? target : 0
+        },itemFactory: { _ in AVPlayerItem(url: asset) })
+        model.refreshSource = { ($0,[]) }
+        await model.play(explicit: true)
+        position = 250
+        await model.background()
+        await model.foreground()
+        XCTAssertEqual(seeks,[120,250])
+        await model.save()
+        XCTAssertEqual(writes,[250],"A new item's zero clock must not replace the checkpoint")
+        position = 251
+        await model.save()
+        XCTAssertEqual(writes,[250,251],"The positioned item can continue syncing normally")
     }
 
     func testManualPauseSurvivesForegroundAndTheNextPlayResolvesFreshSource() async throws {

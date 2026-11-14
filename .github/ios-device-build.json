@@ -1,5 +1,5 @@
 {
-  "version": "0.1.30",
-  "build": 32,
-  "reason": "Build 0.1.30 and verify native playback source recovery after iPhone lock."
+  "version": "0.1.31",
+  "build": 33,
+  "reason": "Build 0.1.31 and verify credits, pending checkpoint, and cross-device rewind recovery."
 }
