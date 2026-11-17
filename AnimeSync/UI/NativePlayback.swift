@@ -115,6 +115,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
 }
 
 @MainActor final class NativePlaybackModel: ObservableObject, Identifiable {
+    static let forwardSkipSeconds = 80
     let id = UUID()
     let metadata: AnimeMetadata
     private(set) var source: MediaSource
@@ -611,6 +612,9 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             Task { [sync] in await sync.flushPending() }
         }
         refreshCaption()
+    }
+    func skipForward() async {
+        await seek(to: position + TimeInterval(Self.forwardSkipSeconds))
     }
     func updateSegments(_ segments: [PlaybackSegment]) {
         guard self.segments != segments else { return }
@@ -1358,10 +1362,10 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
     private func shortcuts(in frame: CGRect) -> some View {
         HStack(spacing: 5) {
             if toolbar.visible {
-                Button("+90s") {
+                Button("+\(NativePlaybackModel.forwardSkipSeconds)s") {
                     toolbar.reveal()
-                    Task { await model.seek(to: model.position + 90) }
-                }.accessibilityLabel("Forward 90 seconds").accessibilityIdentifier("player.skip.90")
+                    Task { await model.skipForward() }
+                }.accessibilityLabel("Forward \(NativePlaybackModel.forwardSkipSeconds) seconds").accessibilityIdentifier("player.skip.long-forward")
                     .disabled(!model.canSeek)
                 if model.nextEpisode != nil {
                     Button {

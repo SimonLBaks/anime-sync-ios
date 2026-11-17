@@ -191,8 +191,9 @@ final class QAAcceptanceTests: XCTestCase {
         XCTAssertTrue(image.insetBy(dx: -1,dy: -1).contains(text),"Captions must remain inside the actual displayed video, including a pillarboxed source")
         XCTAssertLessThan(text.width,image.width - 8,"The caption element must fit text instead of becoming a full-width subtitle strip")
         XCTAssertFalse(text.intersects(dock),"Visible playback controls must not cross a caption line")
-        let shortcut = element(app,"player.skip.90")
+        let shortcut = element(app,"player.skip.long-forward")
         XCTAssertTrue(shortcut.isHittable)
+        XCTAssertEqual(shortcut.label,"Forward 80 seconds")
         XCTAssertEqual(shortcut.frame.maxY,dock.minY,accuracy: 2,"The shortcut row sits flush above the dock")
         XCTAssertFalse(text.intersects(shortcut.frame))
         let back = element(app,"player.close").frame, subtitles = element(app,"player.subtitles").frame

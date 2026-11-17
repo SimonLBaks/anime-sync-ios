@@ -446,11 +446,16 @@ import CoreMedia
         model.player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition())); model.videoReady = true
         await model.seek(to: .nan); await model.seek(to: -.infinity)
         XCTAssertTrue(seeks.isEmpty)
+        await model.skipForward()
+        XCTAssertEqual(seeks,[200])
+        currentPosition = 980
+        await model.skipForward()
+        XCTAssertEqual(seeks,[200,1000])
         await model.seek(to: -10); await model.seek(to: 1200); await model.seek(to: 350)
-        XCTAssertEqual(seeks,[0,1000,350]); XCTAssertTrue(http.requests.isEmpty)
+        XCTAssertEqual(seeks,[200,1000,0,1000,350]); XCTAssertTrue(http.requests.isEmpty)
         XCTAssertFalse(model.isSeeking)
         XCTAssertEqual(model.position,350)
-        XCTAssertEqual(seekingStates,[true,false,true,false,true,false],"Paused dock updates are driven by each explicit seek, without a periodic animation tick")
+        XCTAssertEqual(seekingStates,[true,false,true,false,true,false,true,false,true,false],"Paused dock updates are driven by each explicit seek, without a periodic animation tick")
         await model.play(explicit: true)
         XCTAssertEqual(seeks.last,350,"A deliberate paused timeline action must survive the fresh server resume checkpoint")
         XCTAssertEqual(http.requests.filter { $0.url?.path == "/api/playback" }.count,1)

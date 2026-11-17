@@ -1,5 +1,5 @@
 {
-  "version": "0.1.32",
-  "build": 34,
-  "reason": "Keep early saved episodes visible on Home and add the Anime Sync New Episodes row."
+  "version": "0.1.33",
+  "build": 35,
+  "reason": "Change the manual long forward shortcut to 80 seconds."
 }
