@@ -184,9 +184,12 @@ final class QAAcceptanceTests: XCTestCase {
 
     @MainActor private func assertNativeCaptionAndTransportFit(_ app: XCUIApplication,caption: XCUIElement) {
         let image = element(app,"qa.player.video-region").frame
+        let safeVideo = element(app,"qa.player.safe-video-region").frame
         let dock = element(app,"player.transport").frame
         let text = caption.frame, appFrame = app.frame, viewport = appFrame.insetBy(dx: -1,dy: -1)
         XCTAssertGreaterThan(image.width,100); XCTAssertGreaterThan(image.height,100)
+        XCTAssertGreaterThan(safeVideo.width,100); XCTAssertGreaterThan(safeVideo.height,100)
+        XCTAssertTrue(image.insetBy(dx: -1,dy: -1).contains(safeVideo))
         XCTAssertTrue(viewport.contains(image)); XCTAssertTrue(viewport.contains(dock))
         XCTAssertTrue(image.insetBy(dx: -1,dy: -1).contains(text),"Captions must remain inside the actual displayed video, including a pillarboxed source")
         XCTAssertLessThan(text.width,image.width - 8,"The caption element must fit text instead of becoming a full-width subtitle strip")
@@ -230,8 +233,10 @@ final class QAAcceptanceTests: XCTestCase {
             XCTAssertTrue(image.insetBy(dx: -1,dy: -1).contains(frame),"The center controls belong on the picture")
             XCTAssertFalse(frame.intersects(dock),"The touch targets must clear the timeline dock")
         }
-        XCTAssertEqual(play.midX,image.midX,accuracy: 2)
-        XCTAssertEqual(play.midY,image.midY,accuracy: 2)
+        // Transport follows the visible image inside the safe area. Captions
+        // may extend below that region toward the video edge/Home indicator.
+        XCTAssertEqual(play.midX,safeVideo.midX,accuracy: 2)
+        XCTAssertEqual(play.midY,safeVideo.midY,accuracy: 2)
         XCTAssertEqual(play.midX - previous.midX,next.midX - play.midX,accuracy: 1)
         XCTAssertEqual(previous.midY,play.midY,accuracy: 1); XCTAssertEqual(next.midY,play.midY,accuracy: 1)
         let timeline = controlFrames["player.timeline"]!, timer = element(app,"player.time").frame

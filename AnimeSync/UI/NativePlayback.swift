@@ -1027,6 +1027,7 @@ enum NativeSafeArea {
     weak var geometry: NativeVideoGeometry?
     #if DEBUG
     private let qaVideoRegion = UIView()
+    private let qaSafeVideoRegion = UIView()
     #endif
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -1046,6 +1047,11 @@ enum NativeSafeArea {
         qaVideoRegion.accessibilityLabel = "Video image"; qaVideoRegion.alpha = 0.01
         qaVideoRegion.isHidden = model?.fixture != true
         view.addSubview(qaVideoRegion)
+        qaSafeVideoRegion.isUserInteractionEnabled = false; qaSafeVideoRegion.backgroundColor = .clear
+        qaSafeVideoRegion.isAccessibilityElement = true; qaSafeVideoRegion.accessibilityIdentifier = "qa.player.safe-video-region"
+        qaSafeVideoRegion.accessibilityLabel = "Video controls region"; qaSafeVideoRegion.alpha = 0.01
+        qaSafeVideoRegion.isHidden = model?.fixture != true
+        view.addSubview(qaSafeVideoRegion)
         #endif
         view.addSubview(caption)
     }
@@ -1063,6 +1069,8 @@ enum NativeSafeArea {
         geometry?.report(region,safeViewport: safe)
         #if DEBUG
         qaVideoRegion.frame = region
+        let safeVideo = region.intersection(safe)
+        qaSafeVideoRegion.frame = safeVideo.isNull || safeVideo.isEmpty ? .zero : safeVideo
         #endif
         guard !captionText.isEmpty, region.width > 0, region.height > 0 else { caption.isHidden = true; return }
         let landscape = view.bounds.width > view.bounds.height

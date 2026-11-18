@@ -36,3 +36,14 @@ class SimulatorScopeTests(unittest.TestCase):
         self.assertEqual(focused['unitMethods'], re.findall(r'func (test\w+)\(', source))
         self.assertFalse(focused['selectedUIMethods'])
         self.assertTrue(focused['excludedUIMethods'])
+
+    def test_caption_scope_requires_actual_rendering_and_portrait_landscape_ui(self):
+        focused = module.scope(ROOT, 'caption-style')
+        self.assertEqual(focused['selectedUIMethods'], ['testStandaloneMutedNativeFrameSubtitlesAndClose'])
+        self.assertIn('testUnifiedPlayerDisablesCompetingNativeChromeAndHasNoCaptionBackdrop', focused['unitMethods'])
+        self.assertIn('testChromeUsesLetterboxSpaceInPortraitAndScreenEdgeInLandscape', focused['unitMethods'])
+        self.assertEqual(len(focused['unitMethods']), 8)
+        self.assertEqual(len(focused['unitTargets']), len(focused['unitMethods']))
+        self.assertTrue(all(target.startswith('NativePlaybackTests/') for target in focused['unitTargets']))
+        self.assertTrue(focused['excludedUIMethods'])
+

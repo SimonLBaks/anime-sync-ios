@@ -7,6 +7,7 @@ import re
 
 LIVE = 'testLiveMiruroCatalogueHeroAndSearchExtraction'
 FOCUSED_UNIT_CLASSES = {
+    'caption-style': ('NativePlaybackTests',),
     'home-library': ('AppModelTests', 'ProtocolTests'),
     'library-resume': ('AppModelTests',),
     'connection-recovery': ('AppModelTests', 'NativePlaybackTests', 'NetworkRoutingTests', 'ProviderTests', 'ProtocolTests'),
@@ -21,6 +22,18 @@ FEATURES = [
     'testEpisodeWindowTitlesRangesWatchedAndNamedMiruroSources',
     'testStandaloneMutedNativeFrameSubtitlesAndClose',
 ]
+
+
+CAPTION_METHODS = (
+    'testCaptionLayoutUsesVideoBoundsWithoutPillarStripsAndAvoidsVisibleTransport',
+    'testLongCaptionFitsTheUsableSpaceAboveTheDockInsteadOfOverlappingIt',
+    'testStandardCaptionsClearVisibleControlsAndReturnToThePictureEdge',
+    'testCaptionUsesTheVideoEdgeAndKeepsTheSideCutoutClear',
+    'testChromeUsesLetterboxSpaceInPortraitAndScreenEdgeInLandscape',
+    'testVideoGeometryCoalescesChangedBoundsAndDoesNotRepublishIdenticalLayouts',
+    'testUnifiedPlayerDisablesCompetingNativeChromeAndHasNoCaptionBackdrop',
+    'testEmbeddedCaptionsStayTransparentOutlinedWithSavedOriginalFontPreference',
+)
 
 
 def scope(root, focus=''):
@@ -46,6 +59,7 @@ def scope(root, focus=''):
 def focused_unit_scope(root, focus, all_ui):
     classes = FOCUSED_UNIT_CLASSES[focus]
     ui = {
+        'caption-style': ['testStandaloneMutedNativeFrameSubtitlesAndClose'],
         'home-library': ['testHomeContinueBelowHeroThreePostersAndSeparateHistoryTen'],
         'episode-synopsis': ['testEpisodeSynopsisScrollsInPortraitAndLandscape'],
         'search-suggestions': ['testLiveSearchSuggestionsAndViewAll'],
@@ -64,8 +78,14 @@ def focused_unit_scope(root, focus, all_ui):
             raise ValueError(f'Expected tests in {name} for {focus}')
         methods.extend(selected)
     reason = f'Focused {focus.replace("-", " ")} checks'
-    return dict(focus=focus, unitClasses=list(classes), unitMethods=methods, selectedUIMethods=ui,
-                excludedUIMethods=[dict(method=name, reason=reason) for name in all_ui if name not in ui])
+    result = dict(focus=focus, unitClasses=list(classes), unitMethods=methods, selectedUIMethods=ui,
+                  excludedUIMethods=[dict(method=name, reason=reason) for name in all_ui if name not in ui])
+    if focus == 'caption-style':
+        if not set(CAPTION_METHODS).issubset(methods):
+            raise ValueError('Required caption layout/rendering method is missing')
+        result['unitMethods'] = list(CAPTION_METHODS)
+        result['unitTargets'] = ['NativePlaybackTests/' + name for name in CAPTION_METHODS]
+    return result
 
 
 def main():
@@ -77,7 +97,10 @@ def main():
     selected = scope(root, args.focus)
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / 'test-scope.json').write_text(json.dumps(selected, indent=2) + '\n')
-    if 'unitClasses' in selected:
+    if 'unitTargets' in selected:
+        targets = [f'-only-testing:AnimeSyncTests/{name}' for name in selected['unitTargets']] + [
+            '-only-testing:AnimeSyncUITests/QAAcceptanceTests/' + name for name in selected['selectedUIMethods']]
+    elif 'unitClasses' in selected:
         targets = [f'-only-testing:AnimeSyncTests/{name}' for name in selected['unitClasses']] + [
             '-only-testing:AnimeSyncUITests/QAAcceptanceTests/' + name for name in selected['selectedUIMethods']]
     else:
