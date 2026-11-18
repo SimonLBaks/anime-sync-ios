@@ -1,5 +1,5 @@
 {
-  "version": "0.1.33",
-  "build": 35,
-  "reason": "Change the manual long forward shortcut to 80 seconds."
+  "version": "0.1.34",
+  "build": 36,
+  "reason": "Apply approved heavy outline and downward subtitle shadow consistently across devices."
 }

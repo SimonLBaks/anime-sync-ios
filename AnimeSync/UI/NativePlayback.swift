@@ -880,19 +880,26 @@ enum NativeCaptionLayout {
 
 @MainActor enum NativeCaptionStyle {
     static let fontName = "Roboto-Bold"
+    static let shadowOpacity: CGFloat = 230.0 / 255.0
     static func font(size: CGFloat) -> UIFont { UIFont(name: fontName,size: size) ?? .systemFont(ofSize: size,weight: .bold) }
-    static func outlineRadius(size: CGFloat) -> CGFloat { size * 0.075 }
-    static func padding(size: CGFloat) -> CGFloat { ceil(outlineRadius(size: size)) + 1 }
+    // Match the approved TV preview: 22% total stroke, 9% blur and 9% down.
+    static func outlineRadius(size: CGFloat) -> CGFloat { size * 0.11 }
+    static func shadowBlurRadius(size: CGFloat) -> CGFloat { size * 0.09 }
+    static func shadowOffset(size: CGFloat) -> CGSize { CGSize(width: 0,height: size * 0.09) }
+    static func padding(size: CGFloat) -> CGFloat {
+        ceil(outlineRadius(size: size) + shadowBlurRadius(size: size) * 3 + shadowOffset(size: size).height) + 1
+    }
     static func text(_ value: String,size: CGFloat) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center; paragraph.lineBreakMode = .byWordWrapping
         return NSAttributedString(string: value,attributes: [.font: font(size: size),.foregroundColor: UIColor.white,.paragraphStyle: paragraph])
     }
 }
 
-/// Stroke first, then paint the opaque white glyph interior. A single thick
-/// fill-and-stroke pass would thin that interior; a blur would soften the edge.
+/// Paint black filled outlines and their shadow first, then the opaque white
+/// glyph interior. The shadow never blurs or paints over the white lettering.
 @MainActor final class NativeOutlinedCaptionLabel: UILabel {
     var outlineRadius: CGFloat = 1.5 { didSet { setNeedsDisplay() } }
+    var shadowOpacity: CGFloat = NativeCaptionStyle.shadowOpacity { didSet { setNeedsDisplay() } }
     var contentPadding: CGFloat = 3 { didSet { invalidateIntrinsicContentSize(); setNeedsDisplay() } }
     private var value: NSAttributedString { attributedText ?? NativeCaptionStyle.text(text ?? "",size: font.pointSize) }
     private let options: NSStringDrawingOptions = [.usesLineFragmentOrigin,.usesFontLeading]
@@ -909,7 +916,14 @@ enum NativeCaptionLayout {
         fill.addAttribute(.foregroundColor,value: UIColor.white,range: range)
         let font = (fill.attribute(.font,at: 0,effectiveRange: nil) as? UIFont) ?? self.font ?? NativeCaptionStyle.font(size: 22)
         let stroke = NSMutableAttributedString(attributedString: fill)
-        stroke.addAttributes([.foregroundColor: UIColor.black,.strokeColor: UIColor.black,.strokeWidth: outlineRadius * 200 / font.pointSize],range: range)
+        stroke.addAttributes([.foregroundColor: UIColor.black,.strokeColor: UIColor.black,.strokeWidth: -outlineRadius * 200 / font.pointSize],range: range)
+        if shadowOpacity > 0 {
+            let shadow = NSShadow()
+            shadow.shadowColor = UIColor.black.withAlphaComponent(min(1,shadowOpacity))
+            shadow.shadowBlurRadius = NativeCaptionStyle.shadowBlurRadius(size: font.pointSize)
+            shadow.shadowOffset = NativeCaptionStyle.shadowOffset(size: font.pointSize)
+            stroke.addAttribute(.shadow,value: shadow,range: range)
+        }
         let measured = fill.boundingRect(with: CGSize(width: inner.width,height: .greatestFiniteMagnitude),options: options,context: nil)
         let drawing = CGRect(x: inner.minX,y: inner.minY + max(0,(inner.height - ceil(measured.height)) / 2),width: inner.width,height: min(inner.height,ceil(measured.height)))
         context.saveGState(); context.clip(to: rect); context.setLineJoin(.round)
@@ -1055,8 +1069,8 @@ enum NativeSafeArea {
         let space = NativeCaptionLayout.available(region: region,margin: captionMargin,controls: controlsFrame,header: headerFrame,preferAboveControls: landscape)
         guard space.width > 8, space.height > 4 else { caption.isHidden = true; return }
         let preferred = NativeCaptionLayout.fontSize(preference: captionSize,videoHeight: video.height)
-        caption.contentPadding = NativeCaptionStyle.padding(size: preferred)
         func measure(_ size: CGFloat) -> CGSize {
+            caption.contentPadding = NativeCaptionStyle.padding(size: size)
             caption.attributedText = NativeCaptionStyle.text(captionText,size: size)
             return caption.sizeThatFits(CGSize(width: space.width,height: .greatestFiniteMagnitude))
         }

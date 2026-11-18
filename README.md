@@ -59,7 +59,7 @@ For remote use, enable your VPN and its home subnet route. Remote-network playba
 
 Native playback supports available HLS and MP4 sources. Unsupported formats and website-only players have an explicit website fallback. Source and audio options come from the current website player.
 
-Subtitles use bold white text, a crisp black outline and a transparent background, with adjustable size and position. External VTT/SRT and plain ASS/SSA text are supported; complex typesetting can differ, and text baked into video cannot be restyled. The bundled face matches the visual reference; it is not a verified identification of the website font.
+Subtitles use bold white text, a heavy black outline, a downward shadow and a transparent background, with adjustable size and position. External VTT/SRT and plain ASS/SSA text are supported; complex typesetting can differ, and text baked into video cannot be restyled. The bundled face matches the visual reference; it is not a verified identification of the website font.
 
 Continue reads current server history before playback. Ownership generations and monotonically increasing saves prevent a stale device from overwriting a newer session. Watched markers use actual completion records. Automatic restoration needs captured ownership; explicit Play can deliberately resume the latest checkpoint.
 

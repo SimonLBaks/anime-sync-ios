@@ -368,7 +368,7 @@ import CoreMedia
         XCTAssertEqual(host.caption.numberOfLines,0)
         XCTAssertFalse(host.caption.isUserInteractionEnabled)
         XCTAssertEqual(host.caption.accessibilityIdentifier,"player.caption")
-        for size in [CGFloat(18),CGFloat(32)] {
+        for size in [CGFloat(10),CGFloat(18),CGFloat(32),CGFloat(64)] {
             let label = NativeOutlinedCaptionLabel()
             label.backgroundColor = .clear; label.numberOfLines = 0
             label.attributedText = NativeCaptionStyle.text("Ship off the\nstarboard stern!",size: size)
@@ -379,24 +379,34 @@ import CoreMedia
             label.outlineRadius = NativeCaptionStyle.outlineRadius(size: size)
             label.frame = CGRect(origin: .zero,size: label.sizeThatFits(CGSize(width: 280,height: 500)))
             label.layer.contentsScale = 1; label.setNeedsLayout(); label.layoutIfNeeded()
-            label.setNeedsDisplay(); label.layer.displayIfNeeded()
-            let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
-            let image = UIGraphicsImageRenderer(size: label.bounds.size,format: format).image { context in label.layer.render(in: context.cgContext) }
-            let cgImage = try XCTUnwrap(image.cgImage), width = cgImage.width, height = cgImage.height
-            var pixels = [UInt8](repeating: 0,count: width * height * 4)
-            let context = try XCTUnwrap(CGContext(data: &pixels,width: width,height: height,bitsPerComponent: 8,bytesPerRow: width * 4,
-                                                space: CGColorSpaceCreateDeviceRGB(),bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
-            context.draw(cgImage,in: CGRect(x: 0,y: 0,width: CGFloat(width),height: CGFloat(height)))
-            var white = 0, black = 0, edgeInk = 0
+            let width = Int(label.bounds.width), height = Int(label.bounds.height)
+            func rendered(_ opacity: CGFloat) throws -> [UInt8] {
+                label.shadowOpacity = opacity; label.setNeedsDisplay(); label.layer.displayIfNeeded()
+                let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
+                let image = UIGraphicsImageRenderer(size: label.bounds.size,format: format).image { context in label.layer.render(in: context.cgContext) }
+                let cgImage = try XCTUnwrap(image.cgImage)
+                var pixels = [UInt8](repeating: 0,count: width * height * 4)
+                let context = try XCTUnwrap(CGContext(data: &pixels,width: width,height: height,bitsPerComponent: 8,bytesPerRow: width * 4,
+                                                    space: CGColorSpaceCreateDeviceRGB(),bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+                context.draw(cgImage,in: CGRect(x: 0,y: 0,width: CGFloat(width),height: CGFloat(height)))
+                return pixels
+            }
+            let outline = try rendered(0), pixels = try rendered(NativeCaptionStyle.shadowOpacity)
+            var white = 0, black = 0, shadow = 0, edgeInk = 0
             for y in 0..<height { for x in 0..<width {
                 let offset = (y * width + x) * 4, alpha = pixels[offset + 3]
                 if alpha > 245 && pixels[offset] > 245 && pixels[offset + 1] > 245 && pixels[offset + 2] > 245 { white += 1 }
                 if alpha > 245 && pixels[offset] < 10 && pixels[offset + 1] < 10 && pixels[offset + 2] < 10 { black += 1 }
+                if Int(alpha) > Int(outline[offset + 3]) + 5 { shadow += 1 }
+                if outline[offset + 3] == 255 && outline[offset] == 255 && outline[offset + 1] == 255 && outline[offset + 2] == 255 {
+                    XCTAssertEqual(Array(pixels[offset..<(offset + 4)]),[255,255,255,255],"Adding a black shadow must not darken the opaque white glyph interior")
+                }
                 if (x == 0 || y == 0 || x == width - 1 || y == height - 1) && alpha != 0 { edgeInk += 1 }
             } }
             XCTAssertGreaterThan(white,20,"Two-pass rendering must preserve solid white glyph interiors")
             XCTAssertGreaterThan(black,20,"The outline must draw actual opaque black pixels")
-            XCTAssertEqual(edgeInk,0,"Outline and multiline glyphs must fit with transparent, unclipped outer padding")
+            XCTAssertGreaterThan(shadow,10,"The approved downward shadow must draw additional pixels beyond the heavy outline")
+            XCTAssertEqual(edgeInk,0,"Heavy outlines, their shadow and multiline glyphs must fit with transparent, unclipped outer padding")
         }
     }
 
