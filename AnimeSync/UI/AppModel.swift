@@ -406,23 +406,22 @@ struct TakeoverRequest: Identifiable {
         let model = NativePlaybackModel(metadata: identity,source: source,subtitles: provider.subtitles,sync: sync,fixture: fixture,position: pendingResume?.position,generation: pendingResume?.generation ?? pendingSourceGeneration)
         if !fixture, metadata.isValid {
             let playbackAccount = sync.accountGeneration
-            var choices = provider.sourceChoices.filter(\.selected)
+            var choices = provider.reconnectWebsiteChoices
             model.refreshSource = { [weak self,weak model] source in
                 guard let self, let model, self.active, self.player === model,
                       self.sync.accountGeneration == playbackAccount else { throw ProviderFailure.staleNavigation }
                 let navigation = self.resolvingEpoch, scene = self.sceneGeneration
                 if self.provider.selectionRevision == source.selectionRevision,
                    self.provider.selectedChoiceID == source.choiceID {
-                    let selected = self.provider.sourceChoices.filter(\.selected)
-                    if selected.contains(where: { $0.kind == "audio" }) && selected.contains(where: { $0.kind == "provider" }) {
-                        choices = selected
+                    for selected in self.provider.reconnectWebsiteChoices where !choices.contains(where: { $0.kind == selected.kind }) {
+                        choices.append(selected)
                     }
                 }
                 let refreshed = try await self.provider.refreshNativeMedia(metadata: metadata,source: source,websiteChoices: choices)
                 guard self.active, self.player === model, self.resolvingEpoch == navigation,
                       self.sceneGeneration == scene, self.sync.accountGeneration == playbackAccount,
                       !Task.isCancelled else { throw ProviderFailure.staleNavigation }
-                choices = self.provider.sourceChoices.filter(\.selected)
+                choices = self.provider.reconnectWebsiteChoices
                 self.nativeSubtitleContext = (model.id,navigation,playbackAccount,refreshed.source.selectionRevision)
                 return refreshed
             }

@@ -13,6 +13,7 @@ import WebKit
     @Published private(set) var seasons: [SeasonChoice] = []
     @Published private(set) var episodes: [EpisodeChoice] = []
     @Published private(set) var episodeInventoryComplete = false
+    @Published private(set) var sourceLabels: [String: String] = [:]
     @Published private(set) var sourceChoices: [WebsiteSourceChoice] = []
     @Published private(set) var sourceChoicesLoading = false
     @Published private(set) var selectionRevision: UInt64 = 0
@@ -31,6 +32,7 @@ import WebKit
     var onBrowserPlayback: ((BrowserPlaybackEvent) -> Void)?
     var onFixtureBrowse: ((String, URL) -> Void)?
     var onFixtureEpisode: ((String) -> Void)?
+    var onFixtureSourceChoices: ((String?, String) -> Void)?
     var onFixtureSourceChoice: ((String) -> Bool)?
     var onFixtureBrowserResume: ((TimeInterval, UInt64) -> Void)?
 
@@ -51,6 +53,9 @@ import WebKit
     private var probedSources: Set<String> = []
     private var selectionToken = ""
     private var sourceChoiceSnapshot: UInt64 = 0
+    private var sourceChoiceRequest: (id: String, kind: String?, after: (([WebsiteSourceChoice]) -> Void)?)?
+    private var sourceChoiceDeadline: Task<Void, Never>?
+    private var explicitSourceChoices: [String: WebsiteSourceChoice] = [:]
     private var lastSessionID = ""
     private var lastSessionRevision: Int64?
     private var sessionChanging = false
@@ -146,7 +151,7 @@ import WebKit
                 if self.error == nil { self.error = "Suggestions couldn’t load. Try View All." }
             }
         }
-        episodeInventoryComplete = false; sourceChoices = []; sourceChoicesLoading = false
+        episodeInventoryComplete = false; clearSourceMenus()
         selectedChoiceID = ""; selectionToken = ""; selectionRevision &+= 1
         lastSessionID = ""; lastSessionRevision = nil; sessionChanging = false
         emptyMessage = "Loading Miruro…"
@@ -215,14 +220,14 @@ import WebKit
               withoutFragment(currentURL) == withoutFragment(watchURL) else { throw ProviderFailure.staleNavigation }
 
         let kinds = ["audio", "provider"]
-        func selectedIDs(_ choices: [WebsiteSourceChoice]) -> [String: String]? {
-            var selected: [String: String] = [:]
+        func selectedChoices(_ choices: [WebsiteSourceChoice]) -> [String: WebsiteSourceChoice]? {
+            var selected: [String: WebsiteSourceChoice] = [:]
             for kind in kinds {
                 let options = choices.filter { $0.kind == kind }
                 if options.isEmpty { continue }
                 let matches = options.filter(\.selected)
                 guard matches.count == 1, let match = matches.first else { return nil }
-                selected[kind] = match.id
+                selected[kind] = match
             }
             return selected
         }
@@ -232,10 +237,10 @@ import WebKit
         }
         let canUseCurrentChoices = metadata.map(matchesEpisode) == true &&
             source.selectionRevision == selectionRevision && source.choiceID == selectedChoiceID && !sourceChoicesLoading
-        let snapshot = websiteChoices.isEmpty ? nil : selectedIDs(websiteChoices)
-        let current = canUseCurrentChoices ? selectedIDs(sourceChoices) : nil
+        let snapshot = websiteChoices.isEmpty ? nil : selectedChoices(websiteChoices)
+        let current = canUseCurrentChoices ? selectedChoices(reconnectWebsiteChoices) : nil
         let wanted = snapshot ?? current
-        guard let wanted, source.choiceID.isEmpty || wanted.values.contains(source.choiceID) else { throw ProviderFailure.unavailable }
+        guard let wanted, source.choiceID.isEmpty || wanted.values.contains(where: { $0.id == source.choiceID }) else { throw ProviderFailure.unavailable }
 
         refreshingNativeMedia = true
         let initialMenuSnapshot = sourceChoiceSnapshot
@@ -251,6 +256,7 @@ import WebKit
         let deadline = clock.now.advanced(by: .seconds(20))
         var attempted: Set<String> = []
         var requireNewChoicesAfter: UInt64?
+        var requestedChoices = false
         var playRequestedAtRevision: UInt64?
         var defaultChoicesReadyAt: ContinuousClock.Instant?
         while clock.now < deadline {
@@ -261,16 +267,22 @@ import WebKit
             if let current = metadata {
                 guard matchesEpisode(current) else { throw ProviderFailure.staleNavigation }
                 if defaultChoicesReadyAt == nil { defaultChoicesReadyAt = clock.now.advanced(by: .seconds(2)) }
+                if !wanted.isEmpty, sourceChoiceSnapshot == initialMenuSnapshot, !requestedChoices {
+                    requestedChoices = true; requestSourceChoices()
+                }
                 if !sourceChoicesLoading, requireNewChoicesAfter != sourceChoiceSnapshot,
-                   let selected = selectedIDs(sourceChoices) {
-                    if let kind = kinds.first(where: { wanted[$0] != nil && selected[$0] != wanted[$0] }) {
+                   let selected = selectedChoices(sourceChoices) {
+                    if let kind = kinds.first(where: { kind in
+                        guard let desired = wanted[kind] else { return false }
+                        return reconnectChoice(desired)?.id != selected[kind]?.id || selected[kind] == nil
+                    }) {
                         // Metadata can arrive before the first menu inventory.
                         // In that case wait for the page's menu scan to finish.
                         if sourceChoiceSnapshot == initialMenuSnapshot {
                             try await clock.sleep(for: .milliseconds(100))
                             continue
                         }
-                        guard let target = sourceChoices.first(where: { $0.kind == kind && $0.id == wanted[kind] }), attempted.insert(kind).inserted else {
+                        guard let desired = wanted[kind], let target = reconnectChoice(desired), attempted.insert(kind).inserted else {
                             throw ProviderFailure.unavailable
                         }
                         // The initial acknowledgement only confirms the click. Wait
@@ -302,6 +314,25 @@ import WebKit
         throw ProviderFailure.timeout
     }
 
+    var reconnectWebsiteChoices: [WebsiteSourceChoice] {
+        ["audio", "provider"].compactMap { kind in
+            if let exact = explicitSourceChoices[kind] { return exact }
+            let selected = sourceChoices.filter { $0.kind == kind && $0.selected }
+            if selected.count == 1 { return selected.first }
+            guard let label = sourceLabels[kind], !label.isEmpty, label.lowercased() != kind else { return nil }
+            return WebsiteSourceChoice(id: "",kind: kind,label: label,selected: true)
+        }
+    }
+    private func reconnectChoice(_ wanted: WebsiteSourceChoice) -> WebsiteSourceChoice? {
+        let options = sourceChoices.filter { $0.kind == wanted.kind }
+        if !wanted.id.isEmpty { return options.first { $0.id == wanted.id } }
+        let label = wanted.label.lowercased()
+        let matches = options.filter { $0.label.lowercased() == label }
+        if matches.count == 1 { return matches.first }
+        let named = options.filter { $0.label.lowercased().split(separator: " ").first == label[...] }
+        return named.count == 1 ? named.first : nil
+    }
+
     func selectEpisode(id: String) {
         guard !id.isEmpty, id.count < 80 else { return }
         if fixture { onFixtureEpisode?(id); return }
@@ -311,14 +342,44 @@ import WebKit
         }
         evaluate("window.AnimeTvPage?.selectEpisode(\(ProviderPolicy.jsonLiteral(id)))")
     }
-    func refreshSourceChoices() {
-        guard !websiteMode, metadata != nil else { return }
+    func requestSourceChoices(kind: String? = nil, after: (([WebsiteSourceChoice]) -> Void)? = nil) {
+        guard !websiteMode, metadata != nil, sourceChoiceRequest == nil,
+              kind == nil || kind == "audio" || kind == "provider" else { return }
+        let id = UUID().uuidString
+        sourceChoiceRequest = (id,kind,after)
         sourceChoicesLoading = true
-        if fixture { sourceChoicesLoading = false; return }
-        evaluate("window.AnimeTvPage?.sourceChoices()")
+        if fixture {
+            if let onFixtureSourceChoices { onFixtureSourceChoices(kind,id) }
+            else { finishSourceChoiceRequest([]) }
+            return
+        }
+        let nonce = documentNonce
+        sourceChoiceDeadline = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self, !Task.isCancelled, self.documentNonce == nonce, self.sourceChoiceRequest?.id == id else { return }
+            self.finishSourceChoiceRequest([])
+        }
+        evaluate("window.AnimeTvPage?.sourceChoices(\(ProviderPolicy.jsonLiteral(id)),\(ProviderPolicy.jsonLiteral(kind?.capitalized ?? "")))")
+    }
+    private func finishSourceChoiceRequest(_ options: [WebsiteSourceChoice]) {
+        let callback = sourceChoiceRequest?.after
+        cancelSourceChoiceRequest()
+        callback?(options)
+    }
+    private func cancelSourceChoiceRequest() {
+        sourceChoiceDeadline?.cancel(); sourceChoiceDeadline = nil
+        sourceChoiceRequest = nil; sourceChoicesLoading = false
+    }
+    private func clearSourceMenus() {
+        cancelSourceChoiceRequest()
+        sourceLabels = [:]; sourceChoices = []; explicitSourceChoices = [:]
     }
     func selectSourceChoice(id: String) {
         guard !websiteMode, let choice = sourceChoices.first(where: { $0.id == id }), !choice.selected else { return }
+        cancelSourceChoiceRequest()
+        var selected = choice; selected.selected = true
+        explicitSourceChoices[choice.kind] = selected
+        if choice.kind == "audio" { explicitSourceChoices.removeValue(forKey: "provider") }
         cancelSourceProbes(); sources = []; unsupportedSources = []; subtitles = []
         selectionRevision &+= 1; selectedChoiceID = id; selectionToken = UUID().uuidString
         sessionChanging = true; sourceChoicesLoading = true; sourceStatus = .loadingPlayer; error = nil
@@ -327,10 +388,11 @@ import WebKit
             else { sourceChoicesLoading = false }
             return
         }
-        let token = selectionToken, nonce = documentNonce
+        sourceChoices = []
+        let token = selectionToken, nonce = documentNonce, page = currentURL.absoluteString
         Task { [weak self] in
-            guard let self else { return }
-            let result = try? await self.webView.callAsyncJavaScript("return await window.AnimeTvPage?.selectSource(id,ticket)",arguments: ["id": id,"ticket": token],in: nil,contentWorld: .page)
+            guard let self, self.documentNonce == nonce, self.selectionToken == token else { return }
+            let result = try? await self.webView.callAsyncJavaScript("return location.href === page && await window.AnimeTvPage?.selectSource(id,ticket)",arguments: ["id": id,"ticket": token,"page": page],in: nil,contentWorld: .page)
             guard self.documentNonce == nonce, self.selectionToken == token else { return }
             if result as? Bool != true { self.recoverSourceSelectionFailure() }
         }
@@ -393,11 +455,12 @@ import WebKit
             }
         }
     }
-    func suspend() { pause(); cancelHandoff(ProviderFailure.staleNavigation) }
+    func suspend() { pause(); cancelHandoff(ProviderFailure.staleNavigation); cancelSourceChoiceRequest() }
     func stop() {
         loadTask?.cancel(); cancelHandoff(ProviderFailure.staleNavigation)
         suggestionDeadline?.cancel()
         cancelSourceProbes()
+        clearSourceMenus()
         seasons = []; synopsis = ""; searchSuggestions = []; suggestionsLoading = false
         navigationEpoch &+= 1; documentNonce = UUID().uuidString; loading = false
         if !fixture { clearingDocument = true; webView.stopLoading(); webView.loadHTMLString("", baseURL: nil) }
@@ -523,24 +586,53 @@ import WebKit
             }.sorted { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }
             if next != episodes { episodes = next }
             episodeInventoryComplete = packet["complete"]?.bool == true
+        case "source-summary":
+            guard !websiteMode, metadata != nil, packet["selection"]?.string == selectionToken,
+                  let groups = packet["groups"]?.array else { return }
+            var labels: [String: String] = [:]
+            for value in groups.prefix(2) {
+                guard let item = value.object, let name = item["name"]?.string, ["Audio", "Provider"].contains(name),
+                      let label = item["label"]?.string else { continue }
+                labels[name.lowercased()] = String(label.prefix(200))
+            }
+            if sourceLabels != labels { sourceLabels = labels }
         case "source-choices":
-            guard selectionToken.isEmpty || packet["selection"]?.string == selectionToken else { return }
+            guard !websiteMode, packet["selection"]?.string == selectionToken else { return }
+            let request = sourceChoiceRequest
+            if let request {
+                guard packet["request"]?.string == request.id,
+                      packet["group"]?.string == (request.kind?.capitalized ?? "") else { return }
+            } else if !fixture || packet["request"] != nil { return }
             var result: [WebsiteSourceChoice] = []
             for value in (packet["groups"]?.array ?? []).prefix(2) {
-                guard let group = value.object, let name = group["name"]?.string, ["Audio","Provider"].contains(name) else { continue }
+                guard let group = value.object, let name = group["name"]?.string, ["Audio","Provider"].contains(name),
+                      request?.kind == nil || request?.kind == name.lowercased() else { continue }
                 for value in (group["items"]?.array ?? []).prefix(32) {
                     guard let item = value.object, let id = item["id"]?.string, !id.isEmpty, id.count <= 500,
                           let label = item["label"]?.string, !label.isEmpty, !result.contains(where: { $0.id == id }) else { continue }
                     result.append(WebsiteSourceChoice(id: id,kind: name.lowercased(),label: String(label.prefix(200)),selected: item["selected"]?.bool == true))
                 }
             }
-            sourceChoices = result; sourceChoiceSnapshot &+= 1; sourceChoicesLoading = false
-        case "source-choices-status":
-            guard selectionToken.isEmpty || packet["selection"]?.string == selectionToken else { return }
-            sourceChoicesLoading = packet["loading"]?.bool == true
+            if let kind = request?.kind { sourceChoices = sourceChoices.filter { $0.kind != kind } + result }
+            else { sourceChoices = result }
+            sourceChoiceSnapshot &+= 1
+            finishSourceChoiceRequest(result)
         case "source-selected":
-            guard packet["selection"]?.string == selectionToken else { return }
+            guard !selectionToken.isEmpty, packet["selection"]?.string == selectionToken,
+                  packet["id"]?.string == selectedChoiceID else { return }
+            if let choice = explicitSourceChoices.values.first(where: { $0.id == selectedChoiceID }) {
+                sourceLabels[choice.kind] = choice.label
+            }
             sourceChoicesLoading = false
+            if refreshingNativeMedia {
+                let nonce = documentNonce, selection = selectionToken
+                Task { [weak self] in
+                    // Give Miruro time to apply the control change before checking it.
+                    try? await Task.sleep(for: .milliseconds(100))
+                    guard let self, self.documentNonce == nonce, self.selectionToken == selection, self.refreshingNativeMedia else { return }
+                    self.requestSourceChoices()
+                }
+            }
         case "source-session": consumeSourceSession(packet)
         case "source", "subtitle": candidate(packet,frameURL: currentURL,confirmed: packet["confirmed"]?.bool == true,resourceOnly: false,trustedConfiguration: true)
         case "resolved-watch":
@@ -679,7 +771,7 @@ import WebKit
         cancelHandoff(ProviderFailure.staleNavigation)
         cancelSourceProbes()
         documentNonce = UUID().uuidString; currentURL = url; metadata = nil; synopsis = ""; sources = []; subtitles = []; unsupportedSources = []
-        seasons = []; episodes = []; episodeInventoryComplete = false; sourceChoices = []; sourceChoicesLoading = false
+        seasons = []; episodes = []; episodeInventoryComplete = false; clearSourceMenus()
         selectedChoiceID = ""; selectionToken = ""; selectionRevision &+= 1
         lastSessionID = ""; lastSessionRevision = nil; sessionChanging = false
         installScripts(); decisionHandler(.allow)

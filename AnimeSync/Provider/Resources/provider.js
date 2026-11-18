@@ -6,7 +6,7 @@
   const observed=new Set();
   let customState=new WeakMap();
   let nativeMode=false,catalogueSignature='',heroSignature='';
-  let appBrowse=false,lastResolution='',sourceOptionsLoaded=false;
+  let appBrowse=false,lastResolution='';
   const railStyle=document.createElement('style');
   // iOS supplies the menu in its own overlay. Keep Miruro's rail in the DOM
   // for its Settings/Login actions, without reserving either mobile or desktop space.
@@ -337,14 +337,43 @@
   }
   let sourceChoiceSerial=0;
   const sourceOptions=new Map();
+  const sourceGroups=['Audio','Provider'];
+  let sourceSummarySignature='',sourceSummaryObserver=null,sourceSummaryTimer=0,sourceSummaryDeadline=0;
   const choiceLabel=el=>(el.getAttribute('aria-label')||el.innerText||el.textContent||'').trim().replace(/\s+/g,' ');
+  const sourceTrigger=name=>document.querySelector('main button[aria-label="'+name+'"]')||document.querySelector('button[aria-label="'+name+'"]');
+  const triggerLabel=el=>el.textContent.trim().replace(/\s+/g,' ').slice(0,160);
   const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-  async function sourceMenu(name){
-    const trigger=document.querySelector('main button[aria-label="'+name+'"]')||document.querySelector('button[aria-label="'+name+'"]');
-    if(!trigger)return null;
+  function publishSourceSummary(){
+    if(!nativeMode||!metadata||route!==location.href)return;
+    const groups=[];
+    for(const name of sourceGroups){const trigger=sourceTrigger(name);if(trigger)groups.push({name,label:triggerLabel(trigger)});}
+    if(!sourceSummaryDeadline)sourceSummaryDeadline=Date.now()+5000;
+    if(groups.length===sourceGroups.length||Date.now()>=sourceSummaryDeadline){
+      sourceSummaryObserver?.disconnect();sourceSummaryObserver=null;
+    }else if(!sourceSummaryObserver){
+      sourceSummaryObserver=new MutationObserver(()=>{
+        if(!sourceSummaryTimer)sourceSummaryTimer=setTimeout(()=>{sourceSummaryTimer=0;publishSourceSummary();},32);
+      });
+      sourceSummaryObserver.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['aria-label']});
+    }
+    const signature=JSON.stringify(groups);
+    if(signature!==sourceSummarySignature){sourceSummarySignature=signature;send({type:'source-summary',groups});}
+  }
+  function resetSourceSummary(){
+    sourceSummaryObserver?.disconnect();sourceSummaryObserver=null;sourceSummarySignature='';
+    clearTimeout(sourceSummaryTimer);sourceSummaryTimer=0;sourceSummaryDeadline=0;
+  }
+  async function sourceMenu(name,current,deadline=Date.now()+3600){
+    let trigger=null;
+    while(current()){
+      trigger=sourceTrigger(name);
+      if(trigger||Date.now()>=deadline)break;
+      await delay(60);
+    }
+    if(!trigger||!current())return null;
     const alreadyOpen=trigger.getAttribute('aria-expanded')==='true';if(!alreadyOpen)trigger.click();
     let menu=null;
-    for(let attempt=0;attempt<10;attempt++){
+    for(let attempt=0;attempt<10&&current();attempt++){
       // Svelte closes the previous portal asynchronously. Wait for this trigger's
       // owned menu instead of mistaking a closing Audio menu for Provider.
       await delay(attempt?60:0);
@@ -352,27 +381,49 @@
       if(menu&&menu.querySelector('[role="menuitem"],[role="menuitemradio"]'))break;
     }
     const items=menu?[...menu.querySelectorAll('[role="menuitem"],[role="menuitemradio"]')].filter(el=>visible(el)&&el.getAttribute('aria-disabled')!=='true'):[];
-    return {trigger,items,close(){if(!alreadyOpen&&trigger.getAttribute('aria-expanded')==='true')trigger.click();}};
+    return {trigger,items,close(){if(!alreadyOpen&&trigger.isConnected&&trigger.getAttribute('aria-expanded')==='true')trigger.click();}};
   }
-  async function collectSourceChoices(){
-    const page=location.href,serial=++sourceChoiceSerial;sourceOptions.clear();const groups=[];send({type:'source-choices-status',loading:true});
-    for(const name of ['Audio','Provider']){
-      const menu=await sourceMenu(name);if(serial!==sourceChoiceSerial||page!==location.href){menu?.close();return;}
-      if(menu){const items=menu.items.map((el,index)=>{
-        const label=choiceLabel(el).slice(0,160),id=name+':'+encodeURIComponent(label);sourceOptions.set(id,{name,label,page});
-        return {id,label,selected:el.getAttribute('aria-checked')==='true'||el.getAttribute('data-state')==='checked'||!!el.querySelector('svg.lucide-check')||label===choiceLabel(menu.trigger)||label.split(' ')[0]===choiceLabel(menu.trigger)&&menu.items.filter(item=>choiceLabel(item).split(' ')[0]===choiceLabel(menu.trigger)).length===1};
-      }).filter(item=>item.label);menu.close();if(items.length)groups.push({name,items});}
+  async function collectSourceChoices(request,group=''){
+    if(!nativeMode||!metadata||!request||group&&!sourceGroups.includes(group))return;
+    const page=location.href,serial=++sourceChoiceSerial;
+    const selection=window.AnimeSyncMediaSelection?.()||'';
+    const current=()=>serial===sourceChoiceSerial&&page===location.href;
+    const names=group?[group]:sourceGroups,groups=[],options=new Map(),deadline=Date.now()+3600;
+    for(const name of names){
+      const menu=await sourceMenu(name,current,deadline);
+      if(!current()){menu?.close();return;}
+      if(!menu)continue;
+      const items=[],currentLabel=triggerLabel(menu.trigger).toLowerCase();
+      const candidates=menu.items.slice(0,32);
+      const marked=candidates.filter(el=>el.getAttribute('aria-checked')==='true'||el.getAttribute('data-state')==='checked'||!!el.querySelector('svg.lucide-check'));
+      const exact=candidates.filter(el=>choiceLabel(el).toLowerCase()===currentLabel);
+      const named=candidates.filter(el=>choiceLabel(el).toLowerCase().split(' ')[0]===currentLabel);
+      const selected=marked.length ? (marked.length===1?marked[0]:null) : exact.length===1 ? exact[0] : named.length===1 ? named[0] : null;
+      for(const el of candidates){
+        const label=choiceLabel(el).slice(0,160),id=name+':'+encodeURIComponent(label);
+        if(!label||options.has(id))continue;
+        options.set(id,{name,label,page});items.push({id,label,selected:el===selected});
+      }
+      menu.close();if(items.length)groups.push({name,items});
     }
-    if(serial===sourceChoiceSerial&&page===location.href)send({type:'source-choices',groups});
+    if(!current())return;
+    for(const [id,option] of sourceOptions)if(names.includes(option.name))sourceOptions.delete(id);
+    for(const [id,option] of options)sourceOptions.set(id,option);
+    send({type:'source-choices',groups,request,group,selection});
   }
   async function selectSource(id,ticket){
     const option=sourceOptions.get(id);if(!option||option.page!==location.href)return false;
-    const page=location.href,serial=++sourceChoiceSerial,menu=await sourceMenu(option.name);
-    if(!menu||page!==location.href||serial!==sourceChoiceSerial){menu?.close();return false;}
+    const page=location.href,serial=++sourceChoiceSerial;
+    const current=()=>serial===sourceChoiceSerial&&page===location.href;
+    const menu=await sourceMenu(option.name,current);
+    if(!menu||!current()){menu?.close();return false;}
     const matches=menu.items.filter(el=>choiceLabel(el)===option.label);
     if(matches.length!==1){menu.close();return false;}
     window.AnimeSyncMediaReset?.(ticket);observed.clear();matches[0].click();
-    send({type:'source-selected',id,label:option.label,selection:ticket});setTimeout(()=>{if(serial===sourceChoiceSerial)collectSourceChoices();},100);return true;
+    if(option.name==='Audio')for(const [id,entry] of sourceOptions)if(entry.name==='Provider')sourceOptions.delete(id);
+    resetSourceSummary();
+    send({type:'source-selected',id,label:option.label,selection:ticket});
+    return true;
   }
   function metrics(v,detail={},event=''){
     const previous=customState.get(v)||{};
@@ -401,10 +452,10 @@
     send({type:'progress',metadata,position,duration,ended,playing});
   }
   function scan(){
-    if(route!==location.href){resumeEpoch++;resuming=false;syncedPlayer=null;syncedRevision=null;if(!nativeMode)pausedForNative=false;route=location.href;metadata=null;restored=false;observed.clear();customState=new WeakMap();send({type:'route',url:route});}
+    if(route!==location.href){sourceChoiceSerial++;sourceOptions.clear();resetSourceSummary();resumeEpoch++;resuming=false;syncedPlayer=null;syncedRevision=null;if(!nativeMode)pausedForNative=false;route=location.href;metadata=null;restored=false;observed.clear();customState=new WeakMap();send({type:'route',url:route});}
     resolveSearch();const next=pageData();
     if(next){const {description,...identity}=next;metadata=identity;send({type:'metadata',metadata:next});}
-    catalogue();searchSuggestions();episodes();seasonChoices();if(nativeMode&&metadata&&!sourceOptionsLoaded&&document.querySelector('button[aria-label="Provider"]')){sourceOptionsLoaded=true;collectSourceChoices();}
+    publishSourceSummary();catalogue();searchSuggestions();episodes();seasonChoices();
     if(metadata&&!window.AnimeSyncMediaSelection?.())for(const root of roots())for(const el of root.querySelectorAll('video,source,track')){
       if(el.tagName==='TRACK'&&el.kind!=='subtitles'&&el.kind!=='captions')continue;
       const url=el.currentSrc||el.src;if(!url||!url.startsWith('https://'))continue;
@@ -444,7 +495,7 @@
     browseMode(value){appBrowse=!!value;},
     openPanel(name){let attempts=0;const open=()=>{const button=document.querySelector('aside[style*="site-rail"] button[aria-label="'+name+'"]');
       if(button){button.click();setTimeout(()=>navigate(0),200);}else if(++attempts<10)setTimeout(open,200);};setTimeout(open,300);},
-    nativeMode(value){nativeMode=!!value;if(nativeMode){resumeEpoch++;resuming=false;syncedPlayer=null;syncedRevision=null;}if(!nativeMode)pausedForNative=false;catalogueSignature='';heroSignature='';suggestionSignature='';scan();},
+    nativeMode(value){if(nativeMode&&!value){sourceChoiceSerial++;sourceOptions.clear();resetSourceSummary();}nativeMode=!!value;if(nativeMode){resumeEpoch++;resuming=false;syncedPlayer=null;syncedRevision=null;}if(!nativeMode)pausedForNative=false;catalogueSignature='';heroSignature='';suggestionSignature='';scan();},
     selectEpisode(id){episodeControls.get(id)?.click();},
     sourceChoices:collectSourceChoices,selectSource,
     pause(){resumeEpoch++;resuming=false;for(const v of players()){if(typeof v.pause==='function')v.pause();if(!nativeMode&&metadata)metrics(v,{state:'paused'},'pause');}syncedPlayer=null;syncedRevision=null;pausedForNative=true;},

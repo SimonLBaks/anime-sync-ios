@@ -186,7 +186,22 @@ import Combine
             guard let provider else { return }; var url = URLComponents(url: provider.currentURL, resolvingAgainstBaseURL: false)!
             url.queryItems = [URLQueryItem(name: "ep", value: episode)]; if let target = url.url { provider.open(url: target) }
         }
+        provider.onFixtureSourceChoices = { [weak self,weak provider] kind,id in
+            guard let self, let provider else { return }
+            let group = kind?.capitalized ?? ""
+            let groups = self.fixtureSourceGroups().filter { group.isEmpty || $0.object?["name"]?.string == group }
+            provider.receiveFixture(["type": .string("source-choices"),"request": .string(id),"group": .string(group),"groups": .array(groups)])
+        }
         publishProvider(provider, section: provider.section, url: provider.currentURL)
+    }
+    private func fixtureSourceGroups() -> [JSONValue] {
+        let audio: [JSONValue] = [("qa.audio.sub","Sub"),("qa.audio.dub","Dub")].map { choice,label in
+            .object(["id": .string(choice),"label": .string(label),"selected": .bool(choice == fixtureAudioChoice)])
+        }
+        let sources: [JSONValue] = [("qa.provider.a","Fixture A"),("qa.provider.b","Fixture B")].map { choice,label in
+            .object(["id": .string(choice),"label": .string(label),"selected": .bool(choice == fixtureProviderChoice)])
+        }
+        return [.object(["name": .string("Audio"),"items": .array(audio)]),.object(["name": .string("Provider"),"items": .array(sources)])]
     }
     private func publishProvider(_ provider: MiruroProvider, section: String, url: URL) {
         if let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment, fragment.contains("anime-sync-id=") {
@@ -220,14 +235,12 @@ import Combine
                 episodeChoices.append(.object(item))
             }
             provider.receiveFixture(["type": .string("episodes"),"complete": .bool(true),"episodes": .array(episodeChoices)])
-            let audio: [JSONValue] = [("qa.audio.sub","Sub"),("qa.audio.dub","Dub")].map { choice,label in
-                .object(["id": .string(choice),"label": .string(label),"selected": .bool(choice == fixtureAudioChoice)])
+            let labels = fixtureSourceGroups().compactMap { value -> JSONValue? in
+                guard let name = value.object?["name"],
+                      let label = value.object?["items"]?.array?.first(where: { $0.object?["selected"]?.bool == true })?.object?["label"] else { return nil }
+                return .object(["name": name,"label": label])
             }
-            let sources: [JSONValue] = [("qa.provider.a","Fixture A"),("qa.provider.b","Fixture B")].map { choice,label in
-                .object(["id": .string(choice),"label": .string(label),"selected": .bool(choice == fixtureProviderChoice)])
-            }
-            let groups: [JSONValue] = [.object(["name": .string("Audio"),"items": .array(audio)]),.object(["name": .string("Provider"),"items": .array(sources)])]
-            provider.receiveFixture(["type": .string("source-choices"),"groups": .array(groups)])
+            provider.receiveFixture(["type": .string("source-summary"),"groups": .array(labels)])
             provider.receiveFixture(["type": .string("source"), "url": .string("https://example.invalid/qa-alternate.m3u8"), "mime": .string("application/vnd.apple.mpegurl"), "confirmed": .bool(false)])
             provider.receiveFixture(["type": .string("source"), "url": .string(Self.mediaURL.absoluteString), "mime": .string("application/vnd.apple.mpegurl"), "confirmed": .bool(true)])
             return

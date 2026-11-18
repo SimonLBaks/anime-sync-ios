@@ -516,24 +516,61 @@ struct EpisodeWindow: View {
 
 struct MiruroSourceControls: View {
     @ObservedObject var model: AppModel
-    private func choices(_ kind: String) -> [WebsiteSourceChoice] { model.provider.sourceChoices.filter { $0.kind == kind } }
+    @State private var menuKind: String?
+    @State private var menuChoices: [WebsiteSourceChoice] = []
+    @State private var loadFailed = false
     var body: some View {
-        if !model.provider.sourceChoices.isEmpty || model.provider.sourceChoicesLoading {
+        let labels = model.provider.sourceLabels
+        if !labels.isEmpty || model.provider.sourceChoicesLoading {
             VStack(alignment: .leading,spacing: 10) {
                 HStack { Text("Miruro sources").font(.headline); Spacer(); if model.provider.sourceChoicesLoading { ProgressView().controlSize(.small) } }
                 ForEach(["audio","provider"],id: \.self) { kind in
-                    let items = choices(kind)
-                    if !items.isEmpty { picker(kind,items: items) }
+                    if let label = labels[kind] { selector(kind,label: label) }
                 }
+                if loadFailed { Text("Couldn’t load these choices. Tap to try again.").font(.caption).foregroundStyle(.secondary) }
             }.accessibilityElement(children: .contain).accessibilityIdentifier("sources.choices")
+                .onChange(of: model.provider.currentURL) { _,_ in menuKind = nil; loadFailed = false }
         }
     }
-    private func picker(_ kind: String,items: [WebsiteSourceChoice]) -> some View {
-        let selection = Binding<String>(get: { items.first(where: \.selected)?.id ?? "" },set: { if !$0.isEmpty { model.selectMiruroSource(id: $0) } })
-        return Picker(kind == "audio" ? "Audio" : "Provider",selection: selection) {
-            Text("Choose").tag("")
-            ForEach(items) { choice in Text(choice.label).tag(choice.id) }
-        }.pickerStyle(.menu).disabled(model.provider.sourceChoicesLoading).accessibilityIdentifier("sources.choice." + kind)
+    private func selector(_ kind: String,label: String) -> some View {
+        let title = kind == "audio" ? "Audio" : "Provider"
+        let value = label.isEmpty ? "Choose" : label
+        let showing = Binding(get: { menuKind == kind },set: { if !$0 && menuKind == kind { menuKind = nil } })
+        return Button {
+            loadFailed = false
+            model.provider.requestSourceChoices(kind: kind) { choices in
+                guard !choices.isEmpty else { loadFailed = true; return }
+                menuChoices = choices; menuKind = kind
+            }
+        } label: {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                Text(value).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down").font(.caption.weight(.semibold))
+            }.contentShape(Rectangle())
+        }.buttonStyle(.plain).disabled(model.provider.sourceChoicesLoading)
+            .accessibilityLabel(title).accessibilityValue(value).accessibilityIdentifier("sources.choice." + kind)
+            .popover(isPresented: showing,attachmentAnchor: .rect(.bounds),arrowEdge: .top) {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(menuChoices) { choice in
+                            Button {
+                                menuKind = nil
+                                model.selectMiruroSource(id: choice.id)
+                            } label: {
+                                HStack {
+                                    Text(choice.label).lineLimit(2)
+                                    Spacer()
+                                    if choice.selected { Image(systemName: "checkmark").accessibilityHidden(true) }
+                                }.padding(.horizontal,14).frame(minHeight: 44).contentShape(Rectangle())
+                            }.buttonStyle(.plain).accessibilityLabel(choice.label)
+                                .accessibilityAddTraits(choice.selected ? .isSelected : [])
+                        }
+                    }
+                }.frame(width: 224,height: min(308,CGFloat(menuChoices.count) * 44))
+                    .presentationCompactAdaptation(.popover)
+            }
     }
 }
 

@@ -1,5 +1,5 @@
 {
-  "version": "0.1.34",
-  "build": 36,
-  "reason": "QA only: directly verify subtitle sizing, appearance and both orientations; retain the broader transport check separately."
+  "version": "0.1.35",
+  "build": 37,
+  "reason": "Load Miruro audio and provider menus on demand and verify source selection in the simulator."
 }

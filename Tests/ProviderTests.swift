@@ -369,6 +369,47 @@ import WebKit
         provider.stop()
     }
 
+    func testSourceMenusAreRequestedPerGroupAndRejectStaleReplies() throws {
+        let provider = MiruroProvider(fixture: true)
+        let page = URL(string: "https://miruro.cx/watch/fixture/one-piece?ep=2")!
+        let item = AnimeMetadata(animeID: "21",episode: "2",title: "One Piece",watchURL: page)
+        var kinds: [String] = [], requests: [String] = []
+        provider.onFixtureSourceChoices = { kind,id in kinds.append(kind ?? "all"); requests.append(id) }
+        provider.open(url: page)
+        provider.receiveFixture(["type": .string("metadata"),"metadata": .object(item.json)])
+        provider.receiveFixture(["type": .string("source-summary"),"groups": .array([
+            .object(["name": .string("Audio"),"label": .string("Sub")]),
+            .object(["name": .string("Provider"),"label": .string("Bee")]),
+        ])])
+        XCTAssertEqual(provider.sourceLabels,["audio": "Sub", "provider": "Bee"])
+        XCTAssertTrue(provider.sourceChoices.isEmpty)
+        XCTAssertTrue(requests.isEmpty,"Opening episode details must not load either menu")
+        var loaded: [WebsiteSourceChoice] = []
+        provider.requestSourceChoices(kind: "provider") { loaded = $0 }
+        let request = try XCTUnwrap(requests.last)
+        XCTAssertEqual(kinds,["provider"])
+        let option: JSONValue = .object(["id": .string("Provider:bee"),"label": .string("bee s-sub"),"selected": .bool(true)])
+        let groups: JSONValue = .array([.object(["name": .string("Provider"),"items": .array([option])])])
+        func reply(request: String, group: String, page: URL) -> JSONObject {
+            ["type": .string("source-choices"),"request": .string(request),"group": .string(group),"page": .string(page.absoluteString),"groups": groups]
+        }
+        provider.receiveFixture(reply(request: "previous",group: "Provider",page: page))
+        provider.receiveFixture(reply(request: request,group: "Audio",page: page))
+        XCTAssertTrue(provider.sourceChoicesLoading)
+        XCTAssertTrue(loaded.isEmpty)
+        provider.receiveFixture(reply(request: request,group: "Provider",page: page))
+        XCTAssertFalse(provider.sourceChoicesLoading)
+        XCTAssertEqual(loaded.map(\.id),["Provider:bee"])
+        XCTAssertEqual(provider.reconnectWebsiteChoices.map(\.label),["Sub","bee s-sub"])
+        provider.requestSourceChoices(kind: "provider") { _ in XCTFail("A previous route opened its menu") }
+        let pending = try XCTUnwrap(requests.last)
+        provider.open(url: URL(string: "https://miruro.cx/watch/fixture/one-piece?ep=3")!)
+        provider.receiveFixture(reply(request: pending,group: "Provider",page: page))
+        XCTAssertTrue(provider.sourceLabels.isEmpty)
+        XCTAssertTrue(provider.sourceChoices.isEmpty)
+        XCTAssertFalse(provider.sourceChoicesLoading)
+    }
+
     func testRefreshNativeMediaRestoresTheExactChoiceAndReturnsOnlyCurrentCaptions() async throws {
         let provider = MiruroProvider(fixture: true)
         let page = URL(string: "https://miruro.cx/watch/fixture/one-piece?ep=2")!
@@ -379,27 +420,31 @@ import WebKit
         let bee = WebsiteSourceChoice(id: "Provider:bee",kind: "provider",label: "bee",selected: true)
         provider.open(url: page,native: true)
         let oldSource = MediaSource(url: oldURL,choiceID: bee.id,selectionRevision: provider.selectionRevision)
-        func menu(beeSelected: Bool, token: String? = nil) -> JSONObject {
+        func menu(beeSelected: Bool, request: String, token: String? = nil) -> JSONObject {
             let sun: JSONValue = .object(["id": .string("Provider:sun"),"label": .string("sun"),"selected": .bool(!beeSelected)])
             let bee: JSONValue = .object(["id": .string("Provider:bee"),"label": .string("bee"),"selected": .bool(beeSelected)])
             let group: JSONValue = .object(["name": .string("Provider"),"items": .array([sun,bee])])
-            var packet: JSONObject = ["type": .string("source-choices"),"groups": .array([group])]
+            var packet: JSONObject = ["type": .string("source-choices"),"request": .string(request),"group": .string(""),"groups": .array([group])]
             if let token { packet["selection"] = .string(token) }
             return packet
         }
         provider.onFixtureBrowse = { [weak provider] _,url in
             XCTAssertEqual(url,page)
             provider?.receiveFixture(["type": .string("metadata"),"metadata": .object(episode.json)])
-            provider?.receiveFixture(menu(beeSelected: false))
             provider?.receiveFixture(["type": .string("source"),"url": .string("https://sun.example/default.m3u8"),"configured": .bool(true)])
             provider?.receiveFixture(["type": .string("subtitle"),"url": .string("https://sun.example/default.vtt")])
         }
-        var selections: [String] = []
+        var selections: [String] = [], requests = 0
+        provider.onFixtureSourceChoices = { [weak provider] kind,request in
+            XCTAssertNil(kind)
+            requests += 1
+            provider?.receiveFixture(menu(beeSelected: !selections.isEmpty,request: request,token: "old-token"))
+            XCTAssertTrue(provider?.sourceChoicesLoading == true)
+            provider?.receiveFixture(menu(beeSelected: !selections.isEmpty,request: request))
+        }
         provider.onFixtureSourceChoice = { [weak provider] id in
             selections.append(id)
-            provider?.receiveFixture(menu(beeSelected: true,token: "old-token"))
-            XCTAssertEqual(provider?.sourceChoices.first(where: \.selected)?.id,"Provider:sun")
-            provider?.receiveFixture(menu(beeSelected: true))
+            provider?.receiveFixture(["type": .string("source-selected"),"id": .string(id)])
             provider?.receiveFixture(["type": .string("source"),"url": .string(oldURL.absoluteString),"selection": .string("old-token")])
             provider?.receiveFixture(["type": .string("source"),"url": .string(oldURL.absoluteString)])
             provider?.receiveFixture(["type": .string("source"),"url": .string(newURL.absoluteString),"configured": .bool(true)])
@@ -409,6 +454,7 @@ import WebKit
         }
         let refreshed = try await provider.refreshNativeMedia(metadata: episode,source: oldSource,websiteChoices: [bee])
         XCTAssertEqual(selections,[bee.id])
+        XCTAssertEqual(requests,2,"Reconnect checks the requested source before resuming")
         XCTAssertEqual(refreshed.source.url,newURL)
         XCTAssertEqual(refreshed.source.selectionRevision,provider.selectionRevision)
         XCTAssertGreaterThan(refreshed.source.selectionRevision,oldSource.selectionRevision)
