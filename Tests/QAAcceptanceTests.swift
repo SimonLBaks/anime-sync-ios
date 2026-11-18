@@ -182,7 +182,7 @@ final class QAAcceptanceTests: XCTestCase {
         return playerCoordinate(app,at: CGPoint(x: image.midX,y: image.minY + image.height * 0.3),viewport: viewport)
     }
 
-    @MainActor private func assertNativeCaptionAndTransportFit(_ app: XCUIApplication,caption: XCUIElement) {
+    @MainActor private func assertNativeCaptionAndTransportFit(_ app: XCUIApplication,caption: XCUIElement,defaultCaptionPosition: Bool = true) {
         let image = element(app,"qa.player.video-region").frame
         let safeVideo = element(app,"qa.player.safe-video-region").frame
         let dock = element(app,"player.transport").frame
@@ -203,7 +203,9 @@ final class QAAcceptanceTests: XCTestCase {
         XCTAssertTrue(viewport.contains(back)); XCTAssertTrue(viewport.contains(subtitles))
         XCTAssertTrue(back.intersection(subtitles).isNull || back.intersection(subtitles).isEmpty)
         if appFrame.height > appFrame.width {
-            XCTAssertLessThanOrEqual(image.maxY - text.maxY,max(5,image.height * 0.035),"Portrait captions stay close to the lower picture edge")
+            if defaultCaptionPosition {
+                XCTAssertLessThanOrEqual(image.maxY - text.maxY,max(5,image.height * 0.035),"Default portrait captions stay close to the lower picture edge")
+            }
             XCTAssertLessThanOrEqual(back.maxY,image.minY,"Portrait actions should use the nearby upper letterbox")
             XCTAssertLessThanOrEqual(image.minY - back.maxY,16)
             // UIKit video and SwiftUI controls report independently rounded accessibility frames.
@@ -613,6 +615,90 @@ final class QAAcceptanceTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [chosen],timeout: 6),.completed,"The picker must use the real website choice label")
         screenshot(app,"fixture-episode-window-and-named-source")
         select(app,"home")
+    }
+
+    /// Appearance acceptance keeps the real decoder and actual settings taps,
+    /// without depending on the separate transport/paused-seek regression case.
+    @MainActor func testSubtitleAppearanceInPortraitAndLandscape() {
+        executionTimeAllowance = 300
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launch("--qa-tv-unpaired")
+        let row = element(app,"row.continue")
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        guard let card = cards(row).first else { XCTFail("Requires the fixture episode card"); return }
+        card.tap()
+        let here = element(app,"destination.here")
+        XCTAssertTrue(here.waitForExistence(timeout: 5)); here.tap()
+        let ready = element(app,"qa.player.ready")
+        XCTAssertTrue(ready.waitForExistence(timeout: 5))
+        let decoded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@","ready"),object: ready)
+        XCTAssertEqual(XCTWaiter.wait(for: [decoded],timeout: 45),.completed,"Appearance must be shown over an actual muted decoded video frame")
+        let time = element(app,"qa.player.time")
+        let advancing = XCTNSPredicateExpectation(predicate: NSPredicate { item,_ in
+            guard let marker = item as? XCUIElement, let value = marker.value as? String, let seconds = Double(value) else { return false }
+            return seconds >= 2
+        },object: time)
+        XCTAssertEqual(XCTWaiter.wait(for: [advancing],timeout: 20),.completed,"The real decoder must advance before preparing the paused caption comparison")
+
+        let viewport = app.frame, videoPoint = videoTapPoint(app,viewport: app.frame)
+        let pause = app.staticTexts.matching(identifier: "qa.player.pause-point").firstMatch
+        let coordinates = (pause.value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+        guard coordinates.count == 2, coordinates.allSatisfy(\.isFinite) else {
+            XCTFail("Requires the real Play/Pause button's cached hit point"); return
+        }
+        let pausePoint = CGPoint(x: CGFloat(coordinates[0]),y: CGFloat(coordinates[1]))
+        let pauseTap = playerCoordinate(app,at: pausePoint,viewport: viewport)
+        // A known hidden state lets the next two real taps reveal and pause
+        // without an accessibility lookup consuming the playing hide timer.
+        let hidden = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label == %@","qa.player.controls","Controls hidden")).firstMatch
+        XCTAssertTrue(hidden.waitForExistence(timeout: 8))
+        videoPoint.tap(); pauseTap.tap()
+        let playPause = element(app,"player.play-pause")
+        let paused = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@","Play"),object: playPause)
+        XCTAssertEqual(XCTWaiter.wait(for: [paused],timeout: 8),.completed)
+
+        element(app,"player.subtitles").tap()
+        let settings = element(app,"player.subtitle.settings")
+        let track = element(app,"player.subtitle.track.0")
+        XCTAssertTrue(track.waitForExistence(timeout: 6)); track.tap()
+        element(app,"player.subtitle.done").tap()
+        let caption = element(app,"player.caption")
+        XCTAssertTrue(caption.waitForExistence(timeout: 6))
+        XCTAssertEqual(caption.label,"QA external VTT caption")
+        assertNativeCaptionAndTransportFit(app,caption: caption)
+        let original = caption.frame
+        screenshot(app,"fixture-caption-appearance-portrait")
+
+        element(app,"player.subtitles").tap()
+        let larger = element(app,"player.subtitle.larger")
+        XCTAssertTrue(larger.waitForExistence(timeout: 4)); expose(larger,in: settings); larger.tap()
+        XCTAssertTrue(larger.isSelected,"Appearance must show the selected subtitle size")
+        screenshot(app,"fixture-caption-appearance-size-selected")
+        let raise = element(app,"player.subtitle.raise")
+        XCTAssertTrue(raise.waitForExistence(timeout: 4)); expose(raise,in: settings); raise.tap()
+        element(app,"player.subtitle.done").tap()
+        XCTAssertEqual(caption.label,"QA external VTT caption")
+        XCTAssertGreaterThan(caption.frame.height,original.height,"The size setting must resize the actual caption")
+        XCTAssertLessThan(caption.frame.maxY,original.maxY,"Raise must move the actual portrait caption")
+        assertNativeCaptionAndTransportFit(app,caption: caption,defaultCaptionPosition: false)
+        screenshot(app,"fixture-caption-appearance-portrait-large-raised")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let landscape = XCTNSPredicateExpectation(predicate: NSPredicate { _,_ in app.frame.width > app.frame.height },object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [landscape],timeout: 6),.completed)
+        XCTAssertEqual(caption.label,"QA external VTT caption")
+        assertNativeCaptionAndTransportFit(app,caption: caption,defaultCaptionPosition: false)
+        screenshot(app,"fixture-caption-appearance-landscape")
+
+        element(app,"player.subtitles").tap()
+        let off = element(app,"player.subtitle.off")
+        for _ in 0..<4 { if off.isHittable { break }; settings.swipeDown() }
+        XCTAssertTrue(off.isHittable); off.tap(); element(app,"player.subtitle.done").tap()
+        let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false OR label == ''"),object: caption)
+        XCTAssertEqual(XCTWaiter.wait(for: [removed],timeout: 4),.completed,"Off must remove the rendered caption")
+        element(app,"player.close").tap()
+        gone(element(app,"qa.player.ready"))
+        XCTAssertTrue(element(app,"nav.toggle").waitForExistence(timeout: 5))
     }
 
     @MainActor func testStandaloneMutedNativeFrameSubtitlesAndClose() {

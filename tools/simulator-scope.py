@@ -59,7 +59,7 @@ def scope(root, focus=''):
 def focused_unit_scope(root, focus, all_ui):
     classes = FOCUSED_UNIT_CLASSES[focus]
     ui = {
-        'caption-style': ['testStandaloneMutedNativeFrameSubtitlesAndClose'],
+        'caption-style': ['testSubtitleAppearanceInPortraitAndLandscape'],
         'home-library': ['testHomeContinueBelowHeroThreePostersAndSeparateHistoryTen'],
         'episode-synopsis': ['testEpisodeSynopsisScrollsInPortraitAndLandscape'],
         'search-suggestions': ['testLiveSearchSuggestionsAndViewAll'],

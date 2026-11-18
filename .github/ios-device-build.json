@@ -1,5 +1,5 @@
 {
   "version": "0.1.34",
   "build": 36,
-  "reason": "QA only: verify subtitle rendering and player centering against the actual video safe area."
+  "reason": "QA only: directly verify subtitle sizing, appearance and both orientations; retain the broader transport check separately."
 }
