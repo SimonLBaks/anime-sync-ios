@@ -435,6 +435,38 @@ private final class FixturePreferences {
         let automatic = try await service.begin(metadata: metadata, explicit: false); XCTAssertFalse(automatic.allowed)
         XCTAssertEqual(http.requests.filter { $0.httpMethod == "POST" }.count, 0)
     }
+    func testExplicitPlayOffersFreshSameEpisodeOwnerWithoutChangingTheSourceFenceForOtherStarts() async throws {
+        let preferences = FixturePreferences(), http = FakeHTTP(); let (service, _) = try sync(http, preferences)
+        var activeEpisode = "6.0"
+        http.respond = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return try self.reply(["sync": .object(["generation": .integer(8), "session_id": .string("newer-owner-session"),
+                                                    "presence_protocol": .integer(1), "active": .bool(true),
+                                                    "active_device_label": .string("Lenovo"), "episode": .string(activeEpisode)])])
+        }
+        let offered = try await service.begin(metadata: metadata, explicit: true, expectedSourceGeneration: 7)
+        XCTAssertFalse(offered.allowed)
+        XCTAssertNil(offered.lease)
+        XCTAssertEqual(offered.takeover, PlaybackTakeover(generation: 8, deviceLabel: "Lenovo"))
+
+        let automatic = try await service.begin(metadata: metadata, explicit: false, expectedSourceGeneration: 7)
+        XCTAssertFalse(automatic.allowed)
+        XCTAssertNil(automatic.takeover)
+        let recovery = try await service.begin(metadata: metadata, explicit: true, expectedSourceGeneration: 7, allowsTakeoverPrompt: false)
+        XCTAssertFalse(recovery.allowed)
+        XCTAssertNil(recovery.takeover)
+
+        let staleConfirmation = try await service.begin(metadata: metadata, explicit: true, expectedSourceGeneration: 7,
+                                                          confirmedTakeover: PlaybackTakeover(generation: 7, deviceLabel: "TV"))
+        XCTAssertFalse(staleConfirmation.allowed)
+        XCTAssertNil(staleConfirmation.takeover)
+
+        activeEpisode = "7"
+        let otherEpisode = try await service.begin(metadata: metadata, explicit: true, expectedSourceGeneration: 7)
+        XCTAssertFalse(otherEpisode.allowed)
+        XCTAssertNil(otherEpisode.takeover)
+        XCTAssertEqual(http.requests.filter { $0.httpMethod == "POST" }.count, 0)
+    }
     func testOfflinePendingSaveBlocksHandoffWithoutInvalidatingCurrentLease() async throws {
         let preferences = FixturePreferences(), http = FakeHTTP(); let (service, _) = try sync(http, preferences)
         http.respond = { request in try self.reply(self.head(generation: request.httpMethod == "GET" ? 1 : 2)) }

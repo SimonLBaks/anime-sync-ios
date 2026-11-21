@@ -213,7 +213,7 @@ import Combine
     }
     func begin(metadata: AnimeMetadata, explicit: Bool, expectedSourceGeneration: Int64? = nil,
                resumeOpenPlayer: Bool = false, previousLease: PlaybackLease? = nil,
-               confirmedTakeover: PlaybackTakeover? = nil) async throws -> PlaybackStart {
+               confirmedTakeover: PlaybackTakeover? = nil, allowsTakeoverPrompt: Bool = true) async throws -> PlaybackStart {
         guard metadata.isValid else { throw CoreError.invalidMetadata }
         guard !token.isEmpty else {
             return PlaybackStart(allowed: confirmedTakeover == nil, lease: nil, resumePosition: nil,
@@ -228,11 +228,19 @@ import Combine
             if let outgoing { await flushPendingLocked(keys: [pendingPrefix + outgoing.id]) }
             else { await flushPendingLocked() }
             try sameAccount(epoch)
-            let (_, snapshot) = try await head(metadata, epoch: epoch)
+            let (response, snapshot) = try await head(metadata, epoch: epoch)
             if let confirmedTakeover, confirmedTakeover.generation != snapshot.generation {
                 throw CoreError.conflict("Playback changed. Press Play to check again.")
             }
-            if let expected = expectedSourceGeneration, expected != snapshot.generation { throw CoreError.conflict("Playback continued on another device. Press Play to resume its latest position.") }
+            if let expected = expectedSourceGeneration, expected != snapshot.generation {
+                if explicit, allowsTakeoverPrompt, confirmedTakeover == nil, !(snapshot.sessionID ?? "").isEmpty,
+                   let sync = response["sync"]?.object, sync["presence_protocol"]?.integer == 1, sync["active"]?.bool == true,
+                   let episode = sync["episode"]?.string, AppWebPolicy.identity(animeID: metadata.animeID,episode: episode),
+                   Double(episode) == Double(metadata.episode) {
+                    throw PlaybackConflict.active(PlaybackTakeover(generation: snapshot.generation, deviceLabel: sync["active_device_label"]?.string ?? ""))
+                }
+                throw CoreError.conflict("Playback continued on another device. Press Play to resume its latest position.")
+            }
             if !explicit && !(snapshot.sessionID ?? "").isEmpty { throw CoreError.conflict("Press Play to continue on this device") }
             if let outgoing {
                 let key = pendingPrefix + outgoing.id
@@ -276,7 +284,8 @@ import Combine
             status = "Synced with Anime Sync"
             return PlaybackStart(allowed: true, lease: lease, resumePosition: position, message: nil)
         }} catch PlaybackConflict.active(let takeover) {
-            return PlaybackStart(allowed: false, lease: nil, resumePosition: nil, message: takeover.title, takeover: explicit ? takeover : nil)
+            return PlaybackStart(allowed: false, lease: nil, resumePosition: nil, message: takeover.title,
+                                 takeover: explicit && allowsTakeoverPrompt ? takeover : nil)
         } catch CoreError.conflict(let message) { status = message; return PlaybackStart(allowed: false, lease: nil, resumePosition: nil, message: message) }
         catch CoreError.unauthorized {
             if epoch == accountEpoch { clearUnauthorized() }

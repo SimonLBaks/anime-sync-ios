@@ -178,6 +178,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     private var sourceRefreshTask: Task<(source: MediaSource, subtitles: [SubtitleSource]),Error>?
     private var pauseSave: (epoch: UInt64, task: Task<Void,Never>)?
     private var pendingGeneration: Int64?
+    private let allowsInitialTakeoverPrompt: Bool
     private var explicitPosition: TimeInterval?
     private var reconnectCheckpoint: (account: UInt64, position: TimeInterval)?
     private var previousLease: PlaybackLease?
@@ -215,7 +216,11 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     var showingExternalCaption: Bool { !cues.isEmpty }
     var canSeek: Bool { !disposed && !closing && !itemNeedsReload && videoReady && player.currentItem != nil && duration > 0 && !restoring && !isStarting && !handoffInProgress && !isSeeking }
 
-    init(metadata: AnimeMetadata, source: MediaSource, subtitles: [SubtitleSource], sync: SyncService, fixture: Bool = false, position: TimeInterval? = nil, generation: Int64? = nil, clock: (() -> (position: TimeInterval, duration: TimeInterval))? = nil, captionTransport: HTTPTransport? = nil, seekOperation: ((AVPlayer, TimeInterval) async -> Void)? = nil, startupSeekTimeout: TimeInterval = 12, itemFactory: ((MediaSource) async throws -> AVPlayerItem)? = nil) {
+    init(metadata: AnimeMetadata, source: MediaSource, subtitles: [SubtitleSource], sync: SyncService, fixture: Bool = false,
+         position: TimeInterval? = nil, generation: Int64? = nil, allowsInitialTakeoverPrompt: Bool = false,
+         clock: (() -> (position: TimeInterval, duration: TimeInterval))? = nil, captionTransport: HTTPTransport? = nil,
+         seekOperation: ((AVPlayer, TimeInterval) async -> Void)? = nil, startupSeekTimeout: TimeInterval = 12,
+         itemFactory: ((MediaSource) async throws -> AVPlayerItem)? = nil) {
         self.metadata = metadata; self.source = source; self.sync = sync; self.fixture = fixture
         segments = source.segments
         #if DEBUG
@@ -229,6 +234,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
         self.subtitles = subtitles; self.captionTransport = captionTransport ?? CoreHTTPTransport()
         #endif
         self.explicitPosition = position; self.pendingGeneration = generation; self.clock = clock; self.seekOperation = seekOperation; self.startupSeekTimeout = startupSeekTimeout; self.itemFactory = itemFactory
+        self.allowsInitialTakeoverPrompt = allowsInitialTakeoverPrompt
         knownCheckpointAccount = sync.isSignedIn && (generation != nil || (position ?? 0) > 0) ? sync.accountGeneration : nil
         captionSize = fixture ? 22 : UserDefaults.standard.object(forKey: "caption.size") as? Double ?? 22
         let savedMargin = UserDefaults.standard.object(forKey: "caption.edgeMargin") as? Double
@@ -287,7 +293,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     }
     func prepare() async {
         guard !disposed, !closing, player.currentItem == nil else { return }
-        await play(explicit: true,expectedGeneration: pendingGeneration)
+        await play(explicit: true,expectedGeneration: pendingGeneration,allowsTakeoverPrompt: allowsInitialTakeoverPrompt)
     }
     private func replacePlaybackItem(epoch: UInt64) async throws {
         let nextBridge: MediaBridge?
@@ -491,7 +497,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
         guard request.account == sync.accountGeneration else { return }
         await play(explicit: true, confirmedTakeover: offer)
     }
-    func play(explicit: Bool, expectedGeneration: Int64? = nil, confirmedTakeover: PlaybackTakeover? = nil) async {
+    func play(explicit: Bool, expectedGeneration: Int64? = nil, confirmedTakeover: PlaybackTakeover? = nil, allowsTakeoverPrompt: Bool = true) async {
         guard !disposed, !closing, !isStarting, !isSeeking, !handoffInProgress, takeoverRequest == nil else { return }
         let intentEpoch = startingEpoch
         if let pauseSave, pauseSave.epoch == startingEpoch { await pauseSave.task.value }
@@ -534,7 +540,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
                 let claim = Task { [sync, metadata] in
                     try await sync.begin(metadata: metadata,explicit: explicit,expectedSourceGeneration: expectedGeneration,
                                          resumeOpenPlayer: resumeOpenPlayer && chosenPosition == nil,previousLease: outgoing,
-                                         confirmedTakeover: confirmedTakeover)
+                                         confirmedTakeover: confirmedTakeover,allowsTakeoverPrompt: allowsTakeoverPrompt)
                 }
                 claimTask = claim
                 result = try await withTaskCancellationHandler(operation: { try await claim.value },onCancel: { claim.cancel() })
@@ -718,7 +724,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     func foreground() async {
         backgrounded = false
         guard resumeOnForeground, !disposed, !closing, let generation = pendingGeneration else { return }; resumeOnForeground = false
-        await play(explicit: true,expectedGeneration: generation)
+        await play(explicit: true,expectedGeneration: generation,allowsTakeoverPrompt: false)
     }
     func handoff() async throws -> HandoffSnapshot {
         guard !disposed, !closing, !isSeeking, !handoffInProgress else { throw CoreError.canceled }

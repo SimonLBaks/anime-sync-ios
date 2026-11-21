@@ -47,6 +47,7 @@ struct TakeoverRequest: Identifiable {
     private var searchDelay: Task<Void,Never>?
     private var searchRequest: UInt64 = 0
     private var pendingPlay = false
+    private var pendingPlayHere = false
     private var resolvingEpoch: UInt64 = 0
     private var pendingResume: ResumeSnapshot?
     private var pendingSourceGeneration: Int64?
@@ -349,7 +350,7 @@ struct TakeoverRequest: Identifiable {
                 }
             }
         }
-        pendingPlay = true; launchIfReady()
+        pendingPlay = true; pendingPlayHere = true; launchIfReady()
         // The episode view shows live discovery status beside its visible website
         // fallback. A persistent toast would hide changes and suggest a stuck job.
         if provider.sources.isEmpty { message = nil; provider.browserCommand("play") }
@@ -404,7 +405,10 @@ struct TakeoverRequest: Identifiable {
     private func makePlayer(metadata: AnimeMetadata,source: MediaSource) {
         pendingPlay = false; pendingNextIdentity = nil; message = nil; clearBrowser()
         let identity = fixture ? AnimeMetadata(animeID: "",episode: "",title: metadata.title,watchURL: metadata.watchURL) : metadata
-        let model = NativePlaybackModel(metadata: identity,source: source,subtitles: provider.subtitles,sync: sync,fixture: fixture,position: pendingResume?.position,generation: pendingResume?.generation ?? pendingSourceGeneration)
+        let model = NativePlaybackModel(metadata: identity,source: source,subtitles: provider.subtitles,sync: sync,fixture: fixture,
+                                        position: pendingResume?.position,generation: pendingResume?.generation ?? pendingSourceGeneration,
+                                        allowsInitialTakeoverPrompt: pendingPlayHere)
+        pendingPlayHere = false
         if !fixture, metadata.isValid {
             let playbackAccount = sync.accountGeneration
             var choices = provider.reconnectWebsiteChoices
@@ -582,7 +586,7 @@ struct TakeoverRequest: Identifiable {
         left?.fragment = nil; right?.fragment = nil; return left?.string == right?.string
     }
     private func clearSelection() {
-        resolvingEpoch &+= 1; pendingPlay = false; pendingNextIdentity = nil; pendingResume = nil; pendingSourceGeneration = nil; pendingTVLease = nil; pendingTVEpisode = nil; selectedSourceID = ""
+        resolvingEpoch &+= 1; pendingPlay = false; pendingPlayHere = false; pendingNextIdentity = nil; pendingResume = nil; pendingSourceGeneration = nil; pendingTVLease = nil; pendingTVEpisode = nil; selectedSourceID = ""
         launchTicket = nil; launchTask?.cancel(); launchTask = nil
     }
     private func clearBrowser(pause: Bool = true,cancelStart: Bool = true,retainContinuation: Bool = false) {
