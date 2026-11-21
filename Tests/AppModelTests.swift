@@ -424,12 +424,14 @@ import Foundation
 
     func testWebsiteResumeKeepsCreditsAndWaitsForTheCurrentSeekAcknowledgment() async throws {
         let http = AppModelHTTP(), model = try make(http)
+        let pauseSave = block("Website pause starts saving its credits")
         let url = URL(string: "https://miruro.cx/watch/fixture/one-piece?ep=6")!
         let metadata = AnimeMetadata(animeID: "21",episode: "6",title: "One Piece",watchURL: url)
         var position: Double = 200, generation: Int64 = 4
         var writes: [Double] = []
         http.respond = { request in
             if request.url?.path == "/api/progress", request.httpMethod == "POST" {
+                if writes.isEmpty { await pauseSave.wait() }
                 let body = try JSONValue.parseObject(XCTUnwrap(request.httpBody))
                 position = try XCTUnwrap(body["current_time"]?.double)
                 writes.append(position)
@@ -462,17 +464,12 @@ import Foundation
         let initial = try XCTUnwrap(requests.first)
         XCTAssertEqual(initial.0,200)
         packet("playback-resume-confirmed",["revision": .integer(Int64(initial.1))])
-        let storedCredits = expectation(description: "Website pause saves its credits")
-        let replyNormally = try XCTUnwrap(http.respond)
-        http.respond = { request in
-            let response = try await replyNormally(request)
-            if request.url?.path == "/api/progress", request.httpMethod == "POST" { storedCredits.fulfill() }
-            return response
-        }
         packet("playback-stop",["position": .number(950),"duration": .number(1000),"ended": .bool(false)])
-        await fulfillment(of: [storedCredits],timeout: 3)
-        http.respond = replyNormally
+        await fulfillment(of: [pauseSave.reached],timeout: 3)
         packet("playback-start",["explicit": .bool(true)])
+        for _ in 0..<8 { await Task.yield() }
+        XCTAssertEqual(requests.count,1)
+        pauseSave.open()
         await fulfillment(of: [credits],timeout: 3)
         let reconnected = try XCTUnwrap(requests.last)
         XCTAssertEqual(reconnected.0,950)

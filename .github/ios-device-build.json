@@ -1,5 +1,5 @@
 {
-  "version": "0.1.37",
-  "build": 39,
-  "reason": "Offer a playback transfer when the same episode starts on another device while episode details are open."
+  "version": "0.1.38",
+  "build": 40,
+  "reason": "Preserve a quick press of Play in the iPhone website player while its previous pause position saves."
 }

@@ -604,10 +604,15 @@ import CoreMedia
     func testPlaybackTakeoverCancelLeavesThePlayerPausedUntilAConfirmedPlay() async throws {
         let http = PlaybackHTTP()
         var confirmations: [JSONObject] = []
+        var writes: [JSONObject] = []
         http.respond = { request in
             if request.httpMethod == "GET" { return try self.reply(self.snapshot(7, session: "other-device")) }
-            XCTAssertEqual(request.url?.path, "/api/playback")
             let payload = try self.object(request)
+            if request.url?.path == "/api/progress" {
+                writes.append(payload)
+                return try self.reply(["ok": .bool(true)])
+            }
+            XCTAssertEqual(request.url?.path, "/api/playback")
             if payload["confirm_takeover"]?.bool == true {
                 confirmations.append(payload)
                 return try self.reply(self.snapshot(8))
@@ -624,6 +629,7 @@ import CoreMedia
         model.cancelTakeover()
         await model.confirmTakeover(offer)
         XCTAssertTrue(confirmations.isEmpty)
+        XCTAssertTrue(writes.isEmpty)
         XCTAssertFalse(model.wantsPlayback)
         XCTAssertNil(model.lease)
 
@@ -633,6 +639,11 @@ import CoreMedia
         XCTAssertTrue(model.wantsPlayback)
         XCTAssertEqual(model.lease?.generation, 8)
         XCTAssertEqual(confirmations.map { $0["expected_generation"]?.integer }, [7])
+        let confirmedLease = try XCTUnwrap(model.lease)
+        await model.close()
+        XCTAssertEqual(writes.map { $0["playback_session_id"]?.string }, [confirmedLease.id])
+        XCTAssertEqual(writes.map { $0["playback_generation"]?.integer }, [8])
+        XCTAssertEqual(writes.map { $0["current_time"]?.double }, [120])
     }
 
     func testLatePausedSaveRetainsTheSessionWhenPlayResumed() async throws {

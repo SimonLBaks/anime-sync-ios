@@ -694,13 +694,13 @@ struct TakeoverRequest: Identifiable {
         }
     }
     private func finishBrowserPlayback(_ metadata: AnimeMetadata, lease: PlaybackLease?, position: TimeInterval, duration: TimeInterval, ended: Bool) async {
-        let epoch = browserEpoch
         browserContinuation?.positioned = true
         browserContinuation?.ended = ended
-        browserReady = false; browserStarting = true
-        sync.suspendPresence(lease)
-        await sync.progress(metadata: metadata,lease: lease,position: position,duration: duration,ended: ended)
-        if epoch == browserEpoch { clearBrowser(pause: false,retainContinuation: true) }
+        // Record the final sample before release. Clearing this player lets a
+        // quick Play register while sync serializes the save and next claim.
+        let queued = sync.enqueueProgress(metadata: metadata,lease: lease,position: position,duration: duration,ended: ended)
+        clearBrowser(pause: false,retainContinuation: true)
+        if queued { await sync.flushPending() }
     }
     private func yieldBrowserPlayback(_ lease: PlaybackLease, metadata: AnimeMetadata) async {
         guard active, route.website, browserLease === lease, lease.isValid, !handingOff else { return }
