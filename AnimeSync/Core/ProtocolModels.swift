@@ -93,9 +93,12 @@ struct ResumeSnapshot: Equatable {
     let id: String
     let generation: Int64
     let accountEpoch: UInt64
+    let supportsPresence: Bool
     @Published private(set) var isValid: Bool = true
     private(set) var sequence: Int64 = 0
-    init(id: String, generation: Int64, accountEpoch: UInt64 = 0) { self.id = id; self.generation = generation; self.accountEpoch = accountEpoch }
+    init(id: String, generation: Int64, accountEpoch: UInt64 = 0, supportsPresence: Bool = false) {
+        self.id = id; self.generation = generation; self.accountEpoch = accountEpoch; self.supportsPresence = supportsPresence
+    }
     func invalidate() { isValid = false }
     func nextSequence() -> Int64? { guard isValid, sequence < Int64.max else { invalidate(); return nil }; sequence += 1; return sequence }
 }
@@ -105,6 +108,20 @@ struct PlaybackStart {
     let lease: PlaybackLease?
     let resumePosition: TimeInterval?
     let message: String?
+    var takeover: PlaybackTakeover? = nil
+}
+struct PlaybackTakeover: Equatable {
+    let generation: Int64
+    let deviceLabel: String
+
+    init(generation: Int64, deviceLabel: String) {
+        self.generation = generation
+        let safeLabel = String(deviceLabel.filter { !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }.prefix(80))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.deviceLabel = safeLabel.isEmpty ? "another device" : safeLabel
+    }
+
+    var title: String { "Playing on \(deviceLabel)" }
 }
 struct HandoffSnapshot {
     let saved: Bool

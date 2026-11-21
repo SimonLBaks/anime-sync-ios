@@ -1,5 +1,5 @@
 {
-  "version": "0.1.35",
-  "build": 37,
-  "reason": "Load Miruro audio and provider menus on demand and verify source selection in the simulator."
+  "version": "0.1.36",
+  "build": 38,
+  "reason": "Confirm cross-device playback in iPhone native and website players and preserve the latest saved position."
 }

@@ -20,6 +20,17 @@ import Combine
     var accountGeneration: UInt64 { accountEpoch }
     private var connectSequence: UInt64 = 0
     private var players: [String: PlaybackLease] = [:]
+    private struct PlaybackPresence {
+        let metadata: AnimeMetadata
+        var task: Task<Void, Never>?
+    }
+    private var presence: [String: PlaybackPresence] = [:]
+    private var releasingPresence: [String: (sessionID: String, task: Task<Void, Never>)] = [:]
+    private enum PlaybackConflict: Error {
+        case active(PlaybackTakeover)
+        case handoffPending
+        case superseded
+    }
     private let pendingPrefix = "animesync.pending:"
     private let heldPrefix = "animesync.held:"
     private static let historyRefreshFailure = "Could not refresh history. Check your connection."
@@ -42,12 +53,21 @@ import Combine
     private func clearUnauthorized() {
         accountEpoch &+= 1; token = ""; isSignedIn = false; history = .empty; watchedEpisodes = []; episodeFractions = [:]
         try? secrets.write(nil, for: "sync.session"); status = "Sign in again to resume sync"
-        let old = players.values; players.removeAll(); for lease in old { lease.invalidate(); onOwnershipLost?(lease) }
+        invalidatePlayers()
     }
     func signOut() throws {
         try secrets.write(nil, for: "sync.session")
         accountEpoch &+= 1; connectSequence &+= 1; connecting = false; token = ""; isSignedIn = false; history = .empty; watchedEpisodes = []; episodeFractions = [:]; status = "Sign in to Anime Sync"
-        let old = players.values; players.removeAll(); for lease in old { lease.invalidate(); onOwnershipLost?(lease) }
+        invalidatePlayers()
+    }
+    private func invalidatePlayers() {
+        for monitor in presence.values { monitor.task?.cancel() }
+        presence.removeAll()
+        for release in releasingPresence.values { release.task.cancel() }
+        releasingPresence.removeAll()
+        let old = players.values
+        players.removeAll()
+        for lease in old { lease.invalidate(); onOwnershipLost?(lease) }
     }
     func selectServer(_ origin: URL) throws {
         guard let canonical = AppWebPolicy.origin(origin), AppWebPolicy.dashboards.contains(canonical), let checked = URL(string: canonical) else { throw CoreError.message("Choose a known Anime Sync server") }
@@ -57,7 +77,8 @@ import Combine
     private func request(origin: URL, path: String, body: JSONObject?, authName: String, auth: String, epoch: UInt64) async throws -> JSONObject {
         guard AppWebPolicy.isDashboard(origin), path.hasPrefix("/api/"), CoreHTTPTransport.isSafeHeaderValue(auth),
               let url = URL(string: path, relativeTo: origin)?.absoluteURL, AppWebPolicy.origin(url) == AppWebPolicy.origin(origin) else { throw CoreError.invalidResponse }
-        var request = URLRequest(url: url); request.httpMethod = body == nil ? "GET" : "POST"; request.timeoutInterval = 6
+        var request = URLRequest(url: url); request.httpMethod = body == nil ? "GET" : "POST"
+        request.timeoutInterval = path == "/api/playback/presence" ? 2.5 : 6
         request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue(auth, forHTTPHeaderField: authName)
         if let body = body { request.httpBody = try JSONEncoder().encode(body) }
         let reply = try await transport.request(request, maxBytes: path == "/api/progress" && body == nil ? 8_000_000 : 1_000_000)
@@ -65,6 +86,13 @@ import Combine
         if reply.status == 401 { throw CoreError.unauthorized }
         if reply.status == 409 {
             let json = try? JSONValue.parseObject(reply.body)
+            let code = json?["code"]?.string
+            if path == "/api/playback", code == "playback_active",
+               let sync = json?["sync"]?.object, let generation = sync["generation"]?.integer, generation >= 0 {
+                throw PlaybackConflict.active(PlaybackTakeover(generation: generation, deviceLabel: sync["active_device_label"]?.string ?? ""))
+            }
+            if path == "/api/playback", code == "playback_handoff_pending" { throw PlaybackConflict.handoffPending }
+            if path == "/api/playback/presence", code == "playback_superseded" { throw PlaybackConflict.superseded }
             throw CoreError.conflict(json?["error"]?.string ?? "Playback continued on another device")
         }
         guard (200..<300).contains(reply.status) else { throw CoreError.http(reply.status) }
@@ -184,10 +212,16 @@ import Combine
         catch CoreError.unauthorized { if epoch == accountEpoch { clearUnauthorized() }; throw CoreError.unauthorized }
     }
     func begin(metadata: AnimeMetadata, explicit: Bool, expectedSourceGeneration: Int64? = nil,
-               resumeOpenPlayer: Bool = false, previousLease: PlaybackLease? = nil) async throws -> PlaybackStart {
+               resumeOpenPlayer: Bool = false, previousLease: PlaybackLease? = nil,
+               confirmedTakeover: PlaybackTakeover? = nil) async throws -> PlaybackStart {
         guard metadata.isValid else { throw CoreError.invalidMetadata }
-        guard !token.isEmpty else { return PlaybackStart(allowed: true, lease: nil, resumePosition: nil, message: nil) }
+        guard !token.isEmpty else {
+            return PlaybackStart(allowed: confirmedTakeover == nil, lease: nil, resumePosition: nil,
+                                 message: confirmedTakeover == nil ? nil : "Sign in to resume sync")
+        }
         let epoch = accountEpoch
+        if let release = releasingPresence[metadata.animeID] { await release.task.value }
+        try Task.checkCancellation()
         do { return try await queue.run { [self] in
             try sameAccount(epoch)
             let outgoing = previousLease.flatMap { $0.accountEpoch == epoch ? $0 : nil }
@@ -195,6 +229,9 @@ import Combine
             else { await flushPendingLocked() }
             try sameAccount(epoch)
             let (_, snapshot) = try await head(metadata, epoch: epoch)
+            if let confirmedTakeover, confirmedTakeover.generation != snapshot.generation {
+                throw CoreError.conflict("Playback changed. Press Play to check again.")
+            }
             if let expected = expectedSourceGeneration, expected != snapshot.generation { throw CoreError.conflict("Playback continued on another device. Press Play to resume its latest position.") }
             if !explicit && !(snapshot.sessionID ?? "").isEmpty { throw CoreError.conflict("Press Play to continue on this device") }
             if let outgoing {
@@ -212,13 +249,21 @@ import Combine
                 }
             }
             let id = UUID().uuidString
-            let reply = try await authorized("/api/playback", body: ["site": .string("miruro"), "anime_id": .string(metadata.animeID), "episode": .string(metadata.episode), "device_id": .string(deviceID), "playback_session_id": .string(id), "expected_generation": .integer(snapshot.generation)], epoch: epoch)
+            var body: JSONObject = ["site": .string("miruro"), "anime_id": .string(metadata.animeID), "episode": .string(metadata.episode),
+                                    "device_id": .string(deviceID), "playback_session_id": .string(id), "expected_generation": .integer(snapshot.generation),
+                                    "presence_protocol": .integer(1), "device_label": .string("iPhone")]
+            if confirmedTakeover != nil { body["confirm_takeover"] = .bool(true) }
+            let reply = try await claimPlayback(body, confirmed: confirmedTakeover != nil, epoch: epoch)
             guard let sync = reply["sync"]?.object, let generation = sync["generation"]?.integer, generation >= 0 else { throw CoreError.invalidResponse }
+            let lease = PlaybackLease(id: id, generation: generation, accountEpoch: epoch, supportsPresence: sync["presence_protocol"]?.integer == 1)
+            players[id] = lease
+            if lease.supportsPresence { presence[id] = PlaybackPresence(metadata: metadata) }
             let position: TimeInterval?
-            if resumeOpenPlayer {
+            if resumeOpenPlayer || confirmedTakeover != nil && reply["progress"]?.object != nil {
                 guard let saved = reply["progress"]?.object, let time = saved["current_time"]?.double,
                       let duration = saved["duration"]?.double, time.isFinite, duration.isFinite,
                       duration > 0, time >= 0, time <= duration else {
+                    release(lease)
                     return PlaybackStart(allowed: false, lease: nil, resumePosition: nil,
                                          message: "Could not confirm the synced position. Press Play to try again.")
                 }
@@ -228,15 +273,103 @@ import Combine
                     AppWebPolicy.resume(position: $0["current_time"]?.double ?? 0, duration: $0["duration"]?.double ?? 0, completed: $0["completed"]?.bool ?? false)
                 }
             }
-            let lease = PlaybackLease(id: id, generation: generation, accountEpoch: epoch); players[id] = lease
             status = "Synced with Anime Sync"
             return PlaybackStart(allowed: true, lease: lease, resumePosition: position, message: nil)
-        }} catch CoreError.conflict(let message) { status = message; return PlaybackStart(allowed: false, lease: nil, resumePosition: nil, message: message) }
-        catch CoreError.unauthorized { if epoch == accountEpoch { clearUnauthorized() }; return PlaybackStart(allowed: true, lease: nil, resumePosition: nil, message: "Sign in to resume sync") }
+        }} catch PlaybackConflict.active(let takeover) {
+            return PlaybackStart(allowed: false, lease: nil, resumePosition: nil, message: takeover.title, takeover: explicit ? takeover : nil)
+        } catch CoreError.conflict(let message) { status = message; return PlaybackStart(allowed: false, lease: nil, resumePosition: nil, message: message) }
+        catch CoreError.unauthorized {
+            if epoch == accountEpoch { clearUnauthorized() }
+            return PlaybackStart(allowed: confirmedTakeover == nil, lease: nil, resumePosition: nil, message: "Sign in to resume sync")
+        }
         catch is CancellationError { throw CancellationError() }
-        catch { status = "Offline · progress held on this device"; return PlaybackStart(allowed: true, lease: nil, resumePosition: nil, message: status) }
+        catch {
+            if confirmedTakeover != nil {
+                return PlaybackStart(allowed: false, lease: nil, resumePosition: nil, message: "Could not switch devices. Press Play to try again.")
+            }
+            status = "Offline · progress held on this device"
+            return PlaybackStart(allowed: true, lease: nil, resumePosition: nil, message: status)
+        }
     }
-    func release(_ lease: PlaybackLease?) { if let lease = lease, players[lease.id] === lease { players.removeValue(forKey: lease.id) } }
+    private func claimPlayback(_ body: JSONObject, confirmed: Bool, epoch: UInt64) async throws -> JSONObject {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while true {
+            do { return try await authorized("/api/playback", body: body, epoch: epoch) }
+            catch PlaybackConflict.handoffPending {
+                guard confirmed, clock.now < deadline else { throw CoreError.conflict("Could not switch devices. Press Play to try again.") }
+                try await clock.sleep(for: .milliseconds(400))
+            }
+        }
+    }
+    private func updatePresence(_ lease: PlaybackLease, metadata: AnimeMetadata, state: String) async throws -> JSONObject {
+        let body: JSONObject = ["site": .string("miruro"), "anime_id": .string(metadata.animeID), "episode": .string(metadata.episode),
+                                "device_id": .string(deviceID), "playback_session_id": .string(lease.id),
+                                "playback_generation": .integer(lease.generation), "state": .string(state)]
+        let response = try await authorized("/api/playback/presence", body: body, epoch: lease.accountEpoch)
+        guard let sync = response["sync"]?.object else { throw CoreError.invalidResponse }
+        return sync
+    }
+    func observePresence(_ lease: PlaybackLease, onHandoffRequested: @escaping @MainActor () -> Void) {
+        guard let observation = presence[lease.id], observation.task == nil, players[lease.id] === lease, lease.isValid else { return }
+        let metadata = observation.metadata
+        presence[lease.id]?.task = Task { [weak self, weak lease] in
+            let clock = ContinuousClock()
+            while !Task.isCancelled, let self, let lease, self.players[lease.id] === lease, lease.isValid {
+                var interval: Duration = .seconds(1)
+                let started = clock.now
+                do {
+                    let sync = try await self.updatePresence(lease, metadata: metadata, state: "playing")
+                    guard !Task.isCancelled, self.players[lease.id] === lease, lease.isValid else { return }
+                    if sync["handoff_requested"]?.bool == true { onHandoffRequested(); return }
+                } catch PlaybackConflict.superseded {
+                    guard !Task.isCancelled, self.players[lease.id] === lease, lease.isValid else { return }
+                    lease.invalidate(); self.onOwnershipLost?(lease)
+                    return
+                } catch CoreError.unauthorized {
+                    if !Task.isCancelled, lease.accountEpoch == self.accountEpoch { self.clearUnauthorized() }
+                    return
+                } catch is CancellationError { return }
+                catch { interval = .seconds(2) }
+                do { try await clock.sleep(until: started.advanced(by: interval)) } catch { return }
+            }
+        }
+    }
+    func suspendPresence(_ lease: PlaybackLease?) {
+        guard let lease else { return }
+        presence[lease.id]?.task?.cancel()
+        presence[lease.id]?.task = nil
+    }
+    func retirePresence(_ lease: PlaybackLease?) async throws {
+        guard let lease, players[lease.id] === lease, lease.isValid,
+              let observation = presence[lease.id] else { return }
+        observation.task?.cancel()
+        _ = try await updatePresence(lease, metadata: observation.metadata, state: "paused")
+        presence.removeValue(forKey: lease.id)
+    }
+    func release(_ lease: PlaybackLease?) {
+        guard let lease, players[lease.id] === lease else { return }
+        players.removeValue(forKey: lease.id)
+        guard let observation = presence.removeValue(forKey: lease.id) else { return }
+        observation.task?.cancel()
+        if lease.isValid, lease.accountEpoch == accountEpoch {
+            let animeID = observation.metadata.animeID
+            let previous = releasingPresence[animeID]?.task
+            let task = Task { [weak self] in
+                if let previous { await previous.value }
+                guard let self else { return }
+                defer {
+                    if self.releasingPresence[animeID]?.sessionID == lease.id { self.releasingPresence.removeValue(forKey: animeID) }
+                }
+                guard !Task.isCancelled, lease.accountEpoch == self.accountEpoch else { return }
+                if self.preferences.data(forKey: self.pendingPrefix + lease.id) != nil {
+                    _ = try? await self.queue.run { await self.flushPendingLocked(keys: [self.pendingPrefix + lease.id]) }
+                }
+                _ = try? await self.updatePresence(lease, metadata: observation.metadata, state: "paused")
+            }
+            releasingPresence[animeID] = (lease.id, task)
+        }
+    }
     func progress(metadata: AnimeMetadata, lease: PlaybackLease?, position: TimeInterval, duration: TimeInterval, ended: Bool = false) async {
         guard enqueueProgress(metadata: metadata,lease: lease,position: position,duration: duration,ended: ended) else { return }
         await flushPending()

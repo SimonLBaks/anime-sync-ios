@@ -313,6 +313,121 @@ private final class FixturePreferences {
         let writes = try http.requests.filter { $0.url?.path == "/api/progress" && $0.httpMethod == "POST" }.map(body)
         XCTAssertEqual(writes.map { $0["playback_sequence"]?.integer }, [1, 2]); XCTAssertTrue(writes.allSatisfy { $0["playback_session_id"]?.string == lease.id })
     }
+    func testConfirmedTransferRetriesSameClaimAndReadsTheFinalCreditsCheckpoint() async throws {
+        let preferences = FixturePreferences(), http = FakeHTTP(); let (service, _) = try sync(http, preferences)
+        var claims: [JSONObject] = []
+        var active = head(generation: 7, position: 901, completed: true, session: "fixture-other-session")
+        active["sync"] = .object(["generation": .integer(7), "session_id": .string("fixture-other-session"),
+                                  "active": .bool(true), "active_device_label": .string("Lenovo")])
+        http.respond = { request in
+            if request.httpMethod == "GET" { return try self.reply(active) }
+            XCTAssertEqual(request.url?.path, "/api/playback")
+            let payload = try self.body(request)
+            claims.append(payload)
+            XCTAssertEqual(payload["presence_protocol"]?.integer, 1)
+            XCTAssertEqual(payload["device_label"]?.string, "iPhone")
+            switch claims.count {
+            case 1:
+                XCTAssertNil(payload["confirm_takeover"])
+                return try self.reply(["error": .string("Playing on Lenovo"), "code": .string("playback_active"),
+                                       "sync": active["sync"]!], status: 409)
+            case 2:
+                return try self.reply(["code": .string("playback_handoff_pending")], status: 409)
+            default:
+                return try self.reply(self.head(generation: 8, position: 917, completed: true))
+            }
+        }
+        let offered = try await service.begin(metadata: metadata, explicit: true)
+        XCTAssertFalse(offered.allowed)
+        XCTAssertNil(offered.lease)
+        let offer = try XCTUnwrap(offered.takeover)
+        XCTAssertEqual(offer.deviceLabel, "Lenovo")
+        XCTAssertEqual(offer.generation, 7)
+        XCTAssertEqual(claims.count, 1)
+
+        let confirmed = try await service.begin(metadata: metadata, explicit: true, confirmedTakeover: offer)
+        XCTAssertTrue(confirmed.allowed)
+        XCTAssertEqual(confirmed.resumePosition, 917)
+        XCTAssertEqual(claims.count, 3)
+        XCTAssertEqual(claims[1], claims[2])
+        XCTAssertEqual(claims[1]["expected_generation"]?.integer, 7)
+        XCTAssertEqual(claims[1]["confirm_takeover"]?.bool, true)
+    }
+    func testStaleTakeoverOfferDoesNotBorrowTheCurrentGeneration() async throws {
+        let preferences = FixturePreferences(), http = FakeHTTP(); let (service, _) = try sync(http, preferences)
+        http.respond = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return try self.reply(self.head(generation: 8, session: "different-owner"))
+        }
+        let offer = PlaybackTakeover(generation: 7, deviceLabel: "Lenovo")
+        let result = try await service.begin(metadata: metadata, explicit: true, confirmedTakeover: offer)
+        XCTAssertFalse(result.allowed)
+        XCTAssertNil(result.lease)
+        XCTAssertEqual(http.requests.count, 1)
+    }
+    func testPresenceRequestsOwnerPauseAndRetiresAfterTheFinalSave() async throws {
+        let preferences = FixturePreferences(), http = FakeHTTP(); let (service, _) = try sync(http, preferences)
+        let requested = expectation(description: "Received handoff request")
+        let released = expectation(description: "Released playback presence")
+        http.respond = { request in
+            if request.httpMethod == "GET" { return try self.reply(self.head()) }
+            let payload = try self.body(request)
+            if request.url?.path == "/api/playback" {
+                return try self.reply(["sync": .object(["generation": .integer(8), "presence_protocol": .integer(1)])])
+            }
+            XCTAssertEqual(payload["playback_generation"]?.integer, 8)
+            if request.url?.path == "/api/playback/presence" {
+                if payload["state"]?.string == "paused" { released.fulfill() }
+                return try self.reply(["sync": .object(["handoff_requested": .bool(true)])])
+            }
+            XCTAssertEqual(request.url?.path, "/api/progress")
+            XCTAssertEqual(payload["current_time"]?.double, 214)
+            return try self.reply(["ok": .bool(true)])
+        }
+        let start = try await service.begin(metadata: metadata, explicit: true)
+        let lease = try XCTUnwrap(start.lease)
+        service.observePresence(lease) { requested.fulfill() }
+        await fulfillment(of: [requested], timeout: 2)
+        await service.progress(metadata: metadata, lease: lease, position: 214, duration: 1000)
+        service.release(lease)
+        await fulfillment(of: [released], timeout: 2)
+        let paths = http.requests.compactMap { $0.url?.path }
+        XCTAssertEqual(Array(paths.suffix(3)), ["/api/playback/presence", "/api/progress", "/api/playback/presence"])
+    }
+    func testQuickLocalResumeWaitsForItsOwnPresenceRelease() async throws {
+        let preferences = FixturePreferences(), http = FakeHTTP(); let (service, _) = try sync(http, preferences)
+        let paused = Gate(expectation(description: "Previous local session releasing presence"))
+        let nextRead = expectation(description: "Next claim reads freshly retired head")
+        var claimed = false
+        var released = false
+        http.respond = { request in
+            if request.url?.path == "/api/playback/presence" {
+                let payload = try self.body(request)
+                XCTAssertEqual(payload["state"]?.string, "paused")
+                await paused.wait()
+                released = true
+                return try self.reply(["sync": .object([:])])
+            }
+            if request.httpMethod == "GET" {
+                if claimed { XCTAssertTrue(released); nextRead.fulfill() }
+                return try self.reply(self.head(generation: claimed ? 8 : 7))
+            }
+            let generation: Int64 = claimed ? 9 : 8
+            claimed = true
+            return try self.reply(["sync": .object(["generation": .integer(generation), "presence_protocol": .integer(1)])])
+        }
+        let first = try await service.begin(metadata: metadata, explicit: true)
+        let lease = try XCTUnwrap(first.lease)
+        service.release(lease)
+        await fulfillment(of: [paused.started], timeout: 2)
+        let next = Task { try await service.begin(metadata: metadata, explicit: true) }
+        await Task.yield()
+        XCTAssertEqual(http.requests.map { $0.url?.path }, ["/api/progress", "/api/playback", "/api/playback/presence"])
+        paused.open()
+        await fulfillment(of: [nextRead], timeout: 2)
+        let result = try await next.value
+        XCTAssertEqual(result.lease?.generation, 9)
+    }
     func testGenerationChangeDuringSourceDiscoveryAndUnsolicitedResumeDoNotClaim() async throws {
         let preferences = FixturePreferences(), http = FakeHTTP(); let (service, _) = try sync(http, preferences)
         http.respond = { _ in try self.reply(self.head(generation: 8, session: "another-player")) }

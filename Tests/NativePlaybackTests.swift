@@ -601,6 +601,40 @@ import CoreMedia
         XCTAssertEqual(model.subtitles,beforeClose); XCTAssertEqual(captions.requests.count,1); XCTAssertTrue(http.requests.isEmpty)
     }
 
+    func testPlaybackTakeoverCancelLeavesThePlayerPausedUntilAConfirmedPlay() async throws {
+        let http = PlaybackHTTP()
+        var confirmations: [JSONObject] = []
+        http.respond = { request in
+            if request.httpMethod == "GET" { return try self.reply(self.snapshot(7, session: "other-device")) }
+            XCTAssertEqual(request.url?.path, "/api/playback")
+            let payload = try self.object(request)
+            if payload["confirm_takeover"]?.bool == true {
+                confirmations.append(payload)
+                return try self.reply(self.snapshot(8))
+            }
+            return try self.reply(["code": .string("playback_active"), "error": .string("Playing on Lenovo"),
+                                   "sync": .object(["generation": .integer(7), "active_device_label": .string("Lenovo")])], status: 409)
+        }
+        let model = try make(http)
+        await model.play(explicit: true)
+        let offer = try XCTUnwrap(model.takeoverRequest?.offer)
+        XCTAssertEqual(offer.title, "Playing on Lenovo")
+        XCTAssertFalse(model.wantsPlayback)
+        XCTAssertNil(model.lease)
+        model.cancelTakeover()
+        await model.confirmTakeover(offer)
+        XCTAssertTrue(confirmations.isEmpty)
+        XCTAssertFalse(model.wantsPlayback)
+        XCTAssertNil(model.lease)
+
+        await model.play(explicit: true)
+        let newOffer = try XCTUnwrap(model.takeoverRequest?.offer)
+        await model.confirmTakeover(newOffer)
+        XCTAssertTrue(model.wantsPlayback)
+        XCTAssertEqual(model.lease?.generation, 8)
+        XCTAssertEqual(confirmations.map { $0["expected_generation"]?.integer }, [7])
+    }
+
     func testLatePausedSaveRetainsTheSessionWhenPlayResumed() async throws {
         let http = PlaybackHTTP(), blockedSave = gate("paused save reached transport")
         http.respond = { request in

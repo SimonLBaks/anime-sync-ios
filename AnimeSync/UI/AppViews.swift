@@ -10,6 +10,22 @@ struct SwipeExclusions: PreferenceKey {
     static var defaultValue: [CGRect] = []
     static func reduce(value: inout [CGRect],nextValue: () -> [CGRect]) { value += nextValue() }
 }
+struct PlaybackTakeoverAlert: ViewModifier {
+    let offer: PlaybackTakeover?
+    let onCancel: () -> Void
+    let onConfirm: (PlaybackTakeover) -> Void
+
+    func body(content: Content) -> some View {
+        content.alert(offer?.title ?? "Playing on another device",
+                      isPresented: Binding(get: { offer != nil },set: { _ in }),
+                      presenting: offer) { offer in
+            Button("Cancel",role: .cancel,action: onCancel)
+            Button("Continue here") { onConfirm(offer) }
+        } message: { _ in
+            Text("Pause playback there and continue on this device?")
+        }
+    }
+}
 extension View {
     func keepHorizontalGesture() -> some View {
         background(GeometryReader { geometry in Color.clear.preference(key: SwipeExclusions.self,value: [geometry.frame(in: .named("page"))]) })
@@ -33,6 +49,8 @@ struct AppRoot: View {
         .sheet(isPresented: Binding(get: { model.pairingSheet && !model.tvPanel },set: { model.pairingSheet = $0 }),onDismiss: { model.tv.cancelPairing(); model.discovery.stop() }) { PairingScreen(model: model) }
         .fullScreenCover(item: $model.player,onDismiss: { Task { await model.playerCoverDismissed() } },content: playerView)
         .modifier(TakeoverAlert(model: model,enabled: !model.tvPanel && model.player == nil))
+        .modifier(PlaybackTakeoverAlert(offer: model.player == nil && !model.tvPanel ? model.browserTakeover?.offer : nil,
+                                       onCancel: model.cancelBrowserTakeover,onConfirm: model.confirmBrowserTakeover))
         .overlay(alignment: .bottom) {
             AppNotice(model: model)
         }

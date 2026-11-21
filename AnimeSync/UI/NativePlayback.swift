@@ -148,6 +148,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     @Published private(set) var activeSegment: PlaybackSegment?
     @Published var nextEpisode: EpisodeChoice?
     @Published var nextEpisodePrompt: EpisodeChoice?
+    @Published private(set) var takeoverRequest: (offer: PlaybackTakeover, account: UInt64)?
     @Published private(set) var reachedEnd = false
     private var segments: [PlaybackSegment]
     private(set) var finishedGeneration: Int64?
@@ -410,6 +411,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             startTask?.cancel(); startTask = Task { [weak self] in await self?.play(explicit: true) }
         } else if rate > 0, !backgrounded {
             wantsPlayback = true
+            if let lease { observePlaybackPresence(lease) }
         }
     }
     func pause() {
@@ -417,6 +419,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
         wantsPlayback = false
         player.pause()
         let epoch = startingEpoch, captured = lease
+        sync.suspendPresence(captured)
         guard checkpointReady, pauseSave?.epoch != epoch else { return }
         let task = Task { [weak self] in
             guard let self else { return }
@@ -477,8 +480,19 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
            let replacement = subtitles.first(where: { $0.language == priorSubtitle.language && $0.label == priorSubtitle.label }),
            activeSubtitleRequest != SubtitleRequestIdentity(replacement) { selectSubtitle(replacement) }
     }
-    func play(explicit: Bool, expectedGeneration: Int64? = nil) async {
-        guard !disposed, !closing, !isStarting, !isSeeking, !handoffInProgress else { return }
+    func cancelTakeover() {
+        guard takeoverRequest != nil else { return }
+        takeoverRequest = nil
+        message = "Press Play to continue on this device."
+    }
+    func confirmTakeover(_ offer: PlaybackTakeover) async {
+        guard let request = takeoverRequest, request.offer == offer else { return }
+        takeoverRequest = nil
+        guard request.account == sync.accountGeneration else { return }
+        await play(explicit: true, confirmedTakeover: offer)
+    }
+    func play(explicit: Bool, expectedGeneration: Int64? = nil, confirmedTakeover: PlaybackTakeover? = nil) async {
+        guard !disposed, !closing, !isStarting, !isSeeking, !handoffInProgress, takeoverRequest == nil else { return }
         let intentEpoch = startingEpoch
         if let pauseSave, pauseSave.epoch == startingEpoch { await pauseSave.task.value }
         guard !disposed, !closing, !isStarting, !isSeeking, !handoffInProgress,
@@ -491,7 +505,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
         let requiresOwnedResume = signedIn && expectedGeneration != nil
         let outgoing = previousLease
         let resumeOpenPlayer = !reachedEnd && reconnectCheckpoint?.account == account
-        let chosenPosition = explicitPosition ?? (reachedEnd ? 0 : nil)
+        let chosenPosition = confirmedTakeover == nil ? explicitPosition ?? (reachedEnd ? 0 : nil) : nil
         if requiresOwnedResume { knownCheckpointAccount = account }
         let cachedCheckpoint = (sync.episodeProgress(animeID: metadata.animeID,episode: metadata.episode) ?? 0) > 0
             && !sync.isEpisodeWatched(animeID: metadata.animeID,episode: metadata.episode)
@@ -519,7 +533,8 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             } else {
                 let claim = Task { [sync, metadata] in
                     try await sync.begin(metadata: metadata,explicit: explicit,expectedSourceGeneration: expectedGeneration,
-                                         resumeOpenPlayer: resumeOpenPlayer && chosenPosition == nil,previousLease: outgoing)
+                                         resumeOpenPlayer: resumeOpenPlayer && chosenPosition == nil,previousLease: outgoing,
+                                         confirmedTakeover: confirmedTakeover)
                 }
                 claimTask = claim
                 result = try await withTaskCancellationHandler(operation: { try await claim.value },onCancel: { claim.cancel() })
@@ -527,6 +542,7 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             guard !disposed, epoch == startingEpoch, !Task.isCancelled else { sync.release(result.lease); return }
             guard result.allowed else {
                 explicitPosition = nil; pendingGeneration = nil
+                if let offer = result.takeover { takeoverRequest = (offer, account) }
                 message = result.message ?? "Press Play to continue on this device"; return
             }
             if !fixture, metadata.isValid, result.lease == nil,
@@ -542,8 +558,15 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             lastPlaybackGeneration = result.lease?.generation
             if let captured = lease {
                 invalidation = captured.$isValid.sink { [weak self, weak captured] valid in
-                    guard !valid else { return }; Task { @MainActor in guard let self, self.lease === captured else { return }; self.startingEpoch &+= 1; self.cancelPendingStart(); self.isStarting = false; self.wantsPlayback = false; self.restoring = true; self.player.pause(); self.restoring = false; self.release(); self.message = "Playback continued on another device. Press Play to resume here." }
+                    guard !valid else { return }
+                    Task { @MainActor in
+                        guard let self, self.lease === captured else { return }
+                        self.stopForOtherDevice()
+                        self.release()
+                        self.message = "Playback continued on another device. Press Play to resume here."
+                    }
                 }
+                observePlaybackPresence(captured)
             }
             let at = chosenPosition ?? result.resumePosition ?? fallbackPosition
             explicitPosition = nil; pendingGeneration = nil
@@ -571,6 +594,29 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     func save(ended: Bool = false) async {
         guard let sample = saveSample(), !ended || sample.position >= sample.duration - 2 else { return }
         await sync.progress(metadata: metadata,lease: lease,position: sample.position,duration: sample.duration,ended: ended)
+    }
+    private func observePlaybackPresence(_ lease: PlaybackLease) {
+        sync.observePresence(lease) { [weak self, weak lease] in
+            guard let lease else { return }
+            Task { await self?.yieldToOtherDevice(lease) }
+        }
+    }
+    private func stopForOtherDevice() {
+        startingEpoch &+= 1; cancelPendingStart(); cancelControlSeek(); isStarting = false
+        wantsPlayback = false; resumeOnForeground = false; pendingGeneration = nil; explicitPosition = nil
+        restoring = true; player.pause(); restoring = false
+    }
+    private func yieldToOtherDevice(_ captured: PlaybackLease) async {
+        guard lease === captured, captured.isValid, !disposed, !closing, !backgrounded, !handoffInProgress else { return }
+        handoffInProgress = true
+        stopForOtherDevice()
+        message = "Switching playback to another device…"
+        await save()
+        if lease === captured {
+            release()
+            if !disposed && !closing { message = "Playback continued on another device. Press Play to resume here." }
+        }
+        handoffInProgress = false
     }
     private func release() {
         invalidation?.cancel(); invalidation = nil
@@ -649,6 +695,8 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
     func background() async {
         guard !disposed, !closing, !backgrounded else { return }
         backgrounded = true
+        cancelTakeover()
+        sync.suspendPresence(lease)
         let previousPauseSave = pauseSave?.epoch == startingEpoch ? pauseSave?.task : nil
         cancelControlSeek()
         clearScrubWindow()
@@ -679,6 +727,8 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             throw CoreError.message("The player hasn't reached the saved position. Try again once playback resumes.")
         }
         handoffInProgress = true
+        cancelTakeover()
+        sync.suspendPresence(lease)
         wantsPlayback = false
         clearScrubWindow()
         startingEpoch &+= 1; cancelPendingStart(); isStarting = false; restoring = true; player.pause(); restoring = false
@@ -690,6 +740,8 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
             let result = try await sync.flushForHandoff(metadata: metadata,lease: capturedLease)
             guard !disposed, epoch == startingEpoch, !Task.isCancelled else { throw CancellationError() }
             guard result.saved else { throw CoreError.message("Progress has not been saved. Reconnect Anime Sync before switching screens.") }
+            try await sync.retirePresence(capturedLease)
+            guard !disposed, epoch == startingEpoch, !Task.isCancelled else { throw CancellationError() }
             return HandoffSnapshot(saved: true,position: capturedLease == nil ? result.position : capturedPosition,generation: result.generation)
         } catch {
             cancelHandoff()
@@ -710,6 +762,8 @@ private final class EmbeddedCaptionOutput: NSObject, AVPlayerItemLegibleOutputPu
         guard !disposed, !closing else { return }; closing = true; startingEpoch &+= 1; cancelPendingStart(); cueTask?.cancel(); restoring = true; player.pause(); restoring = false
         cancelControlSeek()
         clearScrubWindow()
+        cancelTakeover()
+        sync.suspendPresence(lease)
         await save(); release(); disposed = true; handoffInProgress = false
         if let ticks { player.removeTimeObserver(ticks) }; ticks = nil
         itemStatusObservation?.invalidate(); itemStatusObservation = nil
@@ -1299,6 +1353,11 @@ private struct QAPauseButtonFrameKey: PreferenceKey {
             } message: { episode in
                 Text("Episode \(episode.number)")
             }
+            .modifier(PlaybackTakeoverAlert(
+                offer: model.takeoverRequest?.offer,
+                onCancel: model.cancelTakeover,
+                onConfirm: { offer in Task { await model.confirmTakeover(offer) } }
+            ))
             .sheet(isPresented: $captions) { SubtitleSettings(model: model) }
             .sheet(isPresented: $options) { PlaybackOptions(model: model) }
             .onAppear { appeared = true; playing = model.player.rate > 0; updateToolbar() }
